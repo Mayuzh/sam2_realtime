@@ -846,7 +846,6 @@ class SAM2ObjectTracker(SAM2Base):
 
         return features
 
-    def get_mask_inputs(self, mask: np.ndarray) -> torch.Tensor:
     def get_mask_inputs(self, mask) -> torch.Tensor:
         """
         Accepts either a numpy array or torch tensor and ensures correct shape (N, 1, H, W)
