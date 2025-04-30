@@ -847,55 +847,48 @@ class SAM2ObjectTracker(SAM2Base):
         return features
 
     def get_mask_inputs(self, mask: np.ndarray) -> torch.Tensor:
+    def get_mask_inputs(self, mask) -> torch.Tensor:
         """
-        Process and prepare mask inputs for the model, resizing them if necessary
-        and aligning them with the required dimensions.
-
-        Parameters
-        ----------
-        mask : np.ndarray
-            Input mask array of shape (height, width) for a single mask
-            or (n, height, width) for multiple masks.
-
-        Returns
-        -------
-        mask_inputs : torch.Tensor
-            A tensor of shape (num_objects, 1, image_size, image_size) containing
-            the processed mask inputs, ready for the model.
-
+        Accepts either a numpy array or torch tensor and ensures correct shape (N, 1, H, W)
         """
 
-        mask = torch.from_numpy(mask)
+        if isinstance(mask, np.ndarray):
+            mask = torch.from_numpy(mask)
 
-        if mask.dim() == 2:
-            # Case: Single mask (height, width)
-            mask = mask[None, None]  # Add batch and channel dimension -> (1, 1, height, width)
+        if not isinstance(mask, torch.Tensor):
+            raise TypeError(f"Expected mask to be a numpy array or tensor, got {type(mask)}")
 
+        if mask.ndim == 2:
+            mask = mask[None, None]  # (1, 1, H, W)
+        elif mask.ndim == 3:
+            if mask.shape[0] == 1:
+                mask = mask[:, None]  # (1, 1, H, W)
+            else:
+                mask = mask[:, None]  # (N, 1, H, W)
+        elif mask.ndim == 4:
+            pass  # already (N, 1, H, W)
         else:
-            # Case: Multiple masks (n, height, width)
-            mask = mask[:, None]  # Add channel dimension -> (n, 1, height, width)
+            raise ValueError(f"Unsupported mask shape: {mask.shape}")
+
+        print("DEBUG: final mask shape before interpolate =", mask.shape)
 
         num_masks, mask_H, mask_W = mask.shape[0], mask.shape[2], mask.shape[3]
 
-        # resize the mask if it doesn't match the model's image size
         if mask_H != self.image_size or mask_W != self.image_size:
             mask = torch.nn.functional.interpolate(mask.float(),
-                                                   size=(self.image_size, self.image_size),
-                                                   align_corners=False,
-                                                   mode="bilinear",
-                                                   antialias=True,  # use antialias for downsampling
-                                                   )
+                                                size=(self.image_size, self.image_size),
+                                                align_corners=False,
+                                                mode="bilinear",
+                                                antialias=True)
             mask = mask >= 0.5
             mask = mask.to(self.device, dtype=torch.bfloat16, non_blocking=True)
 
         mask_inputs = torch.zeros((self.num_objects, 1, mask.shape[2], mask.shape[3]),
-                                  device=self.device,
-                                  dtype=torch.bfloat16
-                                  )
-
+                                device=self.device,
+                                dtype=torch.bfloat16)
         mask_inputs[self.curr_obj_idx:self.curr_obj_idx + num_masks] = mask
-
         return mask_inputs
+
 
     def get_point_inputs(self, box: Optional[np.ndarray] = None, points: Optional[np.ndarray] = None) -> Dict:
         """
