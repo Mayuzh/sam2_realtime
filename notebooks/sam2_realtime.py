@@ -35,6 +35,21 @@ def json_to_mask(json_path, image_shape):
 
     return mask
 
+def load_region_mask(json_path, image_shape):
+    """
+    Load polygon points from LabelMe-style JSON and convert to a binary mask.
+    """
+    with open(json_path, 'r') as f:
+        data = json.load(f)
+
+    mask = np.zeros(image_shape[:2], dtype=np.uint8)
+
+    for shape in data['shapes']:
+        points = np.array(shape['points'], dtype=np.int32)
+        cv2.fillPoly(mask, [points], 1)
+
+    return mask
+
 # =====================
 # Visualization Class
 # =====================
@@ -50,43 +65,40 @@ class Visualizer:
                                                mode="bilinear",
                                                align_corners=False)
         return mask
-    def crop_contour_to_shoreline(self, contour, width):
+
+    def split_contour_into_segments(self, contour, region_mask, distance_threshold=10):
         """
-        Keep only the points between the leftmost-highest and rightmost-highest points.
-        Assumes contour is ordered.
+        Keep only points in the region, and split into segments to avoid long connecting lines.
         """
-        left_index = None
-        right_index = None
-        min_left_y = float('inf')
-        min_right_y = float('inf')
+        filtered_points = []
+        segments = []
 
-        for i, pt in enumerate(contour[:, 0, :]):
-            x, y = pt
-            if x < 0.15 * width and y < min_left_y:
-                min_left_y = y
-                left_index = i
-            if x > 0.85 * width and y < min_right_y:
-                min_right_y = y
-                right_index = i
+        for pt in contour[:, 0, :]:
+            x, y = int(pt[0]), int(pt[1])
+            if 0 <= y < region_mask.shape[0] and 0 <= x < region_mask.shape[1] and region_mask[y, x]:
+                filtered_points.append((x, y))
+            else:
+                # If we hit a point outside region and we have a current segment, finalize it
+                if len(filtered_points) >= 2:
+                    segments.append(np.array(filtered_points, dtype=np.int32).reshape(-1, 1, 2))
+                    filtered_points = []
 
-        if left_index is None or right_index is None:
-            return None  # can't crop without endpoints
+        # Final segment
+        if len(filtered_points) >= 2:
+            segments.append(np.array(filtered_points, dtype=np.int32).reshape(-1, 1, 2))
 
-        # Slice between indices (handle circular cases)
-        if left_index < right_index:
-            cropped = contour[left_index:right_index + 1]
-        else:
-            # wraparound case
-            cropped = np.concatenate((contour[left_index:], contour[:right_index + 1]), axis=0)
-
-        return cropped
-
+        return segments
 
     def overlay_mask(self, frame, mask):
         frame = cv2.resize(frame, (self.video_width, self.video_height))
 
         mask = self.resize_mask(mask)
         mask = (mask > 0.0).numpy()
+        #print("frame shape:", frame.shape)
+        # Load region mask (once per frame, or cache it)
+        region_mask = load_region_mask("./region/frame_1745908973630.json", frame.shape)
+
+
         for i in range(mask.shape[0]):
             #obj_mask = mask[i, 0, :, :]
 
@@ -94,9 +106,13 @@ class Visualizer:
             # Find contours
             contours, _ = cv2.findContours(obj_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             # Draw only the boundary
-            cv2.drawContours(frame, contours, -1, (0, 255, 0), thickness=2)  # Green boundary
+            #cv2.drawContours(frame, contours, -1, (0, 255, 0), thickness=2)  # Green boundary
+            for contour in contours:
+                segments = self.split_contour_into_segments(contour, region_mask)
+                for segment in segments:
+                    cv2.polylines(frame, [segment], isClosed=False, color=(0, 255, 0), thickness=2)
 
-            #frame[obj_mask] = [255, 105, 180]  # Pink mask overlay
+
         return frame
 
 
