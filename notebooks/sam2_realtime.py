@@ -12,12 +12,12 @@ from sam2.build_sam import build_sam2_object_tracker
 NUM_OBJECTS = 2
 YOLO_CHECKPOINT_FILEPATH = "yolov8x-seg.pt"
 SAM_CHECKPOINT_FILEPATH = "../checkpoints/sam2.1_hiera_base_plus.pt"
-SAM_CONFIG_FILEPATH = "./configs/samurai/sam2.1_hiera_b+.yaml"#
+SAM_CONFIG_FILEPATH = "./configs/samurai/sam2.1_hiera_b+.yaml"
 # SAM_CHECKPOINT_FILEPATH = "../checkpoints/sam2.1_hiera_small.pt"
 # SAM_CONFIG_FILEPATH = "./configs/samurai/sam2.1_hiera_s.yaml"
 DEVICE = 'cuda:0'
-VIDEO_PATH = "./videos/seabright2.mp4"
-#VIDEO_PATH = "http://stage-ams-nfs.srv.axds.co/stream/adaptive/ucsc/walton_lighthouse/hls.m3u8"
+#VIDEO_PATH = "./videos/simulated_seabright2.mp4"
+VIDEO_PATH = "http://stage-ams-nfs.srv.axds.co/stream/adaptive/ucsc/walton_lighthouse/hls.m3u8"
 MASK_JSON_PATH = "./masks/frame_1745908973630.json"  # <-- path to your labeled mask
 
 # =====================
@@ -90,7 +90,7 @@ class Visualizer:
         return segments
 
     def overlay_mask(self, frame, mask):
-        frame = cv2.resize(frame, (self.video_width, self.video_height))
+        #frame = cv2.resize(frame, (self.video_width, self.video_height))
 
         mask = self.resize_mask(mask)
         mask = (mask > 0.0).numpy()
@@ -126,10 +126,9 @@ def main():
         print("Error: Unable to open video stream.")
         return
 
-    height = int(video_stream.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    width = int(video_stream.get(cv2.CAP_PROP_FRAME_WIDTH))
-
-    visualizer = Visualizer(width, height)
+    # height = int(video_stream.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    # width = int(video_stream.get(cv2.CAP_PROP_FRAME_WIDTH))
+    # visualizer = Visualizer(width, height)
 
     sam = build_sam2_object_tracker(
         num_objects=NUM_OBJECTS,
@@ -147,35 +146,44 @@ def main():
             ret, frame = video_stream.read()
             if not ret:
                 break
-            # ✅ Skip every other frame
-            frame_idx += 1
+            # print("Frame shape:", frame.shape)
+            print("Capture width:", video_stream.get(cv2.CAP_PROP_FRAME_WIDTH))
+            print("Capture height:", video_stream.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+            height, width = frame.shape[:2]
+            visualizer = Visualizer(width, height)
+
+            video_stream.set(cv2.CAP_PROP_POS_FRAMES, 0)
+
+            # Skip every other frame
+            # frame_idx += 1
             # if frame_idx % 5 != 0:
             #     continue
 
             img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-            # if first_frame:
-            #     bbox = np.array([[[0, 580], [2560, 1920]]])  # Draw boundary for first frame
-
-            #     sam_out = sam.track_new_object(img=img, box=bbox)
-
-            #     for box in bbox:
-            #         top_left = tuple(box[0])
-            #         bottom_right = tuple(box[1])
-            #         cv2.rectangle(frame, top_left, bottom_right, (0, 255, 0), 2)
-
-            #     first_frame = False
             if first_frame:
-                binary_mask = json_to_mask(MASK_JSON_PATH, (img.shape[0], img.shape[1]))  # (H, W)
+                bbox = np.array([[[0, 580], [2560, 1920]]])  # Draw boundary for first frame
 
-                # Convert to float32 and shape (1, 1, H, W)
-                binary_mask = np.expand_dims(np.expand_dims(binary_mask.astype(np.float32), axis=0), axis=0)
+                sam_out = sam.track_new_object(img=img, box=bbox)
 
-                print("binary_mask.shape =", binary_mask.shape)  # Confirm (1, 1, H, W)
-                print("binary_mask dtype =", binary_mask.dtype)  # Confirm float32
+                for box in bbox:
+                    top_left = tuple(box[0])
+                    bottom_right = tuple(box[1])
+                    cv2.rectangle(frame, top_left, bottom_right, (0, 255, 0), 2)
 
-                sam_out = sam.track_new_object(img=img, mask=binary_mask)
                 first_frame = False
+            # if first_frame:
+            #     binary_mask = json_to_mask(MASK_JSON_PATH, (img.shape[0], img.shape[1]))  # (H, W)
+
+            #     # Convert to float32 and shape (1, 1, H, W)
+            #     binary_mask = np.expand_dims(np.expand_dims(binary_mask.astype(np.float32), axis=0), axis=0)
+
+            #     print("binary_mask.shape =", binary_mask.shape)  # Confirm (1, 1, H, W)
+            #     print("binary_mask dtype =", binary_mask.dtype)  # Confirm float32
+
+            #     sam_out = sam.track_new_object(img=img, mask=binary_mask)
+            #     first_frame = False
 
 
 
