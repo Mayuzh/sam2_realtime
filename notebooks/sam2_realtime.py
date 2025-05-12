@@ -12,12 +12,12 @@ from sam2.build_sam import build_sam2_object_tracker
 NUM_OBJECTS = 2
 YOLO_CHECKPOINT_FILEPATH = "yolov8x-seg.pt"
 SAM_CHECKPOINT_FILEPATH = "../checkpoints/sam2.1_hiera_base_plus.pt"
-SAM_CONFIG_FILEPATH = "./configs/samurai/sam2.1_hiera_b+.yaml"
+SAM_CONFIG_FILEPATH = "./configs/samurai/sam2.1_hiera_b+.yaml"#
 # SAM_CHECKPOINT_FILEPATH = "../checkpoints/sam2.1_hiera_small.pt"
 # SAM_CONFIG_FILEPATH = "./configs/samurai/sam2.1_hiera_s.yaml"
 DEVICE = 'cuda:0'
-#VIDEO_PATH = "./videos/simulated_seabright2.mp4"
-VIDEO_PATH = "http://stage-ams-nfs.srv.axds.co/stream/adaptive/ucsc/walton_lighthouse/hls.m3u8"
+VIDEO_PATH = "./videos/seabright2.mp4"
+#VIDEO_PATH = "http://stage-ams-nfs.srv.axds.co/stream/adaptive/ucsc/walton_lighthouse/hls.m3u8"
 MASK_JSON_PATH = "./masks/frame_1745908973630.json"  # <-- path to your labeled mask
 
 # =====================
@@ -90,7 +90,7 @@ class Visualizer:
         return segments
 
     def overlay_mask(self, frame, mask):
-        #frame = cv2.resize(frame, (self.video_width, self.video_height))
+        frame = cv2.resize(frame, (self.video_width, self.video_height))
 
         mask = self.resize_mask(mask)
         mask = (mask > 0.0).numpy()
@@ -106,11 +106,11 @@ class Visualizer:
             # Find contours
             contours, _ = cv2.findContours(obj_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             # Draw only the boundary
-            #cv2.drawContours(frame, contours, -1, (0, 255, 0), thickness=2)  # Green boundary
-            for contour in contours:
-                segments = self.split_contour_into_segments(contour, region_mask)
-                for segment in segments:
-                    cv2.polylines(frame, [segment], isClosed=False, color=(0, 255, 0), thickness=2)
+            cv2.drawContours(frame, contours, -1, (0, 255, 0), thickness=2)  # Green boundary
+            # for contour in contours:
+            #     segments = self.split_contour_into_segments(contour, region_mask)
+            #     for segment in segments:
+            #         cv2.polylines(frame, [segment], isClosed=False, color=(0, 255, 0), thickness=2)
 
 
         return frame
@@ -126,9 +126,10 @@ def main():
         print("Error: Unable to open video stream.")
         return
 
-    # height = int(video_stream.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    # width = int(video_stream.get(cv2.CAP_PROP_FRAME_WIDTH))
-    # visualizer = Visualizer(width, height)
+    height = int(video_stream.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    width = int(video_stream.get(cv2.CAP_PROP_FRAME_WIDTH))
+
+    visualizer = Visualizer(width, height)
 
     sam = build_sam2_object_tracker(
         num_objects=NUM_OBJECTS,
@@ -146,19 +147,10 @@ def main():
             ret, frame = video_stream.read()
             if not ret:
                 break
-            # print("Frame shape:", frame.shape)
-            print("Capture width:", video_stream.get(cv2.CAP_PROP_FRAME_WIDTH))
-            print("Capture height:", video_stream.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-            height, width = frame.shape[:2]
-            visualizer = Visualizer(width, height)
-
-            video_stream.set(cv2.CAP_PROP_POS_FRAMES, 0)
-
-            # Skip every other frame
-            # frame_idx += 1
-            # if frame_idx % 5 != 0:
-            #     continue
+            # ✅ Skip every other frame
+            frame_idx += 1
+            if frame_idx % 5 != 0:
+                continue
 
             img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
@@ -193,7 +185,9 @@ def main():
 
             # Overlay segmentation mask
             frame_with_mask = visualizer.overlay_mask(frame, sam_out["pred_masks"])
-
+            frame_with_mask = cv2.resize(frame_with_mask, (1280, 960))
+            cv2.namedWindow('SAM2 Realtime Tracking', cv2.WINDOW_NORMAL)
+            cv2.resizeWindow('SAM2 Realtime Tracking', 1280, 960)
             cv2.imshow("SAM2 Realtime Tracking", frame_with_mask)
 
             # Exit on 'q' key
