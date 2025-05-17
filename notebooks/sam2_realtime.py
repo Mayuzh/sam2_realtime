@@ -16,7 +16,7 @@ SAM_CONFIG_FILEPATH = "./configs/samurai/sam2.1_hiera_b+.yaml"
 # SAM_CHECKPOINT_FILEPATH = "../checkpoints/sam2.1_hiera_small.pt"
 # SAM_CONFIG_FILEPATH = "./configs/samurai/sam2.1_hiera_s.yaml"
 DEVICE = 'cuda:0'
-VIDEO_PATH = "./videos/walton_lighthouse-2025-05-15-221132Z.mp4"
+VIDEO_PATH = "./videos/camera_switch.mp4"
 #VIDEO_PATH = "http://stage-ams-nfs.srv.axds.co/stream/adaptive/ucsc/walton_lighthouse/hls.m3u8"
 
 # =====================
@@ -43,33 +43,6 @@ def json_to_mask(json_path, image_shape):
 
     return mask
 
-def load_rock_block_mask(json_path, frame_shape):
-    """
-    Loads a LabelMe-style .json and builds a binary mask where rock regions are 1.
-    """
-    with open(json_path, 'r') as f:
-        data = json.load(f)
-
-    mask = np.zeros(frame_shape[:2], dtype=np.uint8)
-
-    for shape in data['shapes']:
-        if shape['label'] == 'rock':
-            points = np.array(shape['points'], dtype=np.int32)
-            cv2.fillPoly(mask, [points], 1)
-
-    return mask  # binary mask with rocks = 1
-import torch.nn.functional as F
-
-def resize_rock_mask_for_prediction(rock_mask_np, target_shape, device='cpu'):
-    """
-    Resize binary rock mask (numpy) to match model prediction shape.
-    """
-    rock_mask_tensor = torch.tensor(rock_mask_np.astype(np.float32))[None, None]  # [1, 1, H, W]
-    resized = F.interpolate(rock_mask_tensor,
-                            size=target_shape,
-                            mode='nearest')  # keep binary structure
-    return resized.to(device)
-
 
 # =====================
 # Visualization Class
@@ -81,27 +54,37 @@ class Visualizer:
 
     def resize_mask(self, mask):
         mask = torch.tensor(mask, device='cpu')
-        mask = torch.nn.functional.interpolate(mask,
-                                               size=(self.video_height, self.video_width),
-                                               mode="bilinear",
-                                               align_corners=False)
+        mask = torch.nn.functional.interpolate(
+            mask,
+            size=(self.video_height, self.video_width),
+            mode="bilinear",
+            align_corners=False
+        )
         return mask
 
-    def overlay_mask(self, frame, mask):
+    def overlay_mask(self, frame, pred_masks, rock_mask=None):
         frame = cv2.resize(frame, (self.video_width, self.video_height))
 
-        mask = self.resize_mask(mask)
-        mask = (mask > 0.0).numpy()
+        # Resize prediction masks
+        pred_masks = self.resize_mask(pred_masks)
+        pred_masks = (pred_masks > 0.0).numpy()
 
-        for i in range(mask.shape[0]):
-            #obj_mask = mask[i, 0, :, :]
+        # Resize rock mask if provided
+        if rock_mask is not None:
+            rock_mask = self.resize_mask(rock_mask)
+            rock_mask = (rock_mask > 0.0).numpy()
 
-            obj_mask = (mask[i, 0, :, :] * 255).astype(np.uint8)
-            # Find contours
+        for i in range(pred_masks.shape[0]):
+            # Draw prediction mask boundaries (green)
+            obj_mask = (pred_masks[i, 0, :, :] * 255).astype(np.uint8)
             contours, _ = cv2.findContours(obj_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            # Draw only the boundary
             cv2.drawContours(frame, contours, -1, (0, 255, 0), thickness=2)  # Green boundary
 
+        # Draw rock mask boundaries (red) if provided
+        if rock_mask is not None:
+            rock_mask = (rock_mask[0, 0, :, :] * 255).astype(np.uint8)
+            contours, _ = cv2.findContours(rock_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            cv2.drawContours(frame, contours, -1, (0, 0, 255), thickness=2)  # Red boundary
 
         return frame
 
@@ -142,9 +125,9 @@ def main():
     mask_site_a = json_to_mask(mask_json_site_a, prompt_img_site_a.shape)
     mask_site_a = np.expand_dims(np.expand_dims(mask_site_a.astype(np.float32), axis=0), axis=0)  # Convert to float32 and shape (1, 1, H, W)
 
-    # rock_mask_json = "./region/walton_lighthouse-2025-05-13-231928Z.json"
-    # rock_mask =  json_to_mask(rock_mask_json, prompt_img_site_a.shape)
-    # rock_mask = np.expand_dims(np.expand_dims(mask_site_a.astype(np.float32), axis=0), axis=0)  # Convert to float32 and shape (1, 1, H, W)
+    rock_mask_json = "./region/walton_lighthouse-2025-05-13-231928Z.json"
+    rock_mask =  json_to_mask(rock_mask_json, prompt_img_site_a.shape)
+    rock_mask = np.expand_dims(np.expand_dims(rock_mask.astype(np.float32), axis=0), axis=0)  # Convert to float32 and shape (1, 1, H, W)
 
     with torch.inference_mode(), torch.autocast(DEVICE, dtype=torch.bfloat16):
         frame_idx = 0  # initialize frame counter
@@ -159,7 +142,6 @@ def main():
             #     continue
 
             img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            rock_mask = load_rock_block_mask("./region/walton_lighthouse-2025-05-13-231928Z.json", frame.shape)
 
             if first_frame:
                 print("First frame: initializing with bounding box prompt.")
@@ -224,32 +206,23 @@ def main():
                                                     dtype=torch.bfloat16, device=DEVICE)
             }
 
-            # # Resize rock mask to match predicted mask shape
-            # pred_shape = sam_out["pred_masks"].shape[-2:]  # (H, W)
-            # rock_mask_resized = resize_rock_mask_for_prediction(rock_mask, pred_shape, device=DEVICE)
-
-            # # # Remove detections in rock region
-            # # sam_out["pred_masks"] = sam_out["pred_masks"].clone()
-            # # sam_out["pred_masks"][:, :, rock_mask_resized.bool()[0, 0]] = 0
-
-            # # Extract and convert to 2D uint8 image
-            # resized_mask_np = rock_mask_resized[0, 0].cpu().numpy().astype(np.uint8) * 255  # shape: (H, W)
-            # resized_mask_vis = cv2.resize(resized_mask_np, (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_NEAREST)
-
-            # overlay = frame.copy()
-            # overlay[resized_mask_vis > 0] = (0, 0, 255)  # red for rock region
-
-            # # Blend with original frame (optional)
-            # blended = cv2.addWeighted(frame, 0.7, overlay, 0.3, 0)
-
-            # cv2.imshow("Resized Rock Mask Overlay", blended)
-
-            # Overlay segmentation mask
-            frame_with_mask = visualizer.overlay_mask(frame, sam_out["pred_masks"])
+            # Overlay segmentation mask and rock mask
+            frame_with_mask = visualizer.overlay_mask(
+                frame, 
+                sam_out["pred_masks"], 
+                rock_mask=rock_mask  # Pass the rock mask here
+            )
             frame_with_mask = cv2.resize(frame_with_mask, (1280, 960))
             cv2.namedWindow('SAM2 Realtime Tracking', cv2.WINDOW_NORMAL)
             cv2.resizeWindow('SAM2 Realtime Tracking', 1280, 960)
             cv2.imshow("SAM2 Realtime Tracking", frame_with_mask)
+
+            # Overlay segmentation mask
+            # frame_with_mask = visualizer.overlay_mask(frame, sam_out["pred_masks"])
+            # frame_with_mask = cv2.resize(frame_with_mask, (1280, 960))
+            # cv2.namedWindow('SAM2 Realtime Tracking', cv2.WINDOW_NORMAL)
+            # cv2.resizeWindow('SAM2 Realtime Tracking', 1280, 960)
+            # cv2.imshow("SAM2 Realtime Tracking", frame_with_mask)
 
             # Exit on 'q' key
             if cv2.waitKey(1) & 0xFF == ord('q'):
