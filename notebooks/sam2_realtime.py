@@ -5,18 +5,19 @@ import numpy as np
 import torch
 import json
 from sam2.build_sam import build_sam2_object_tracker
+import torch.nn.functional as F  # Add this import at the top
 
 # =====================
 # Config
 # =====================
-NUM_OBJECTS = 2
+NUM_OBJECTS = 1
 YOLO_CHECKPOINT_FILEPATH = "yolov8x-seg.pt"
 SAM_CHECKPOINT_FILEPATH = "../checkpoints/sam2.1_hiera_base_plus.pt"
 SAM_CONFIG_FILEPATH = "./configs/samurai/sam2.1_hiera_b+.yaml"
 # SAM_CHECKPOINT_FILEPATH = "../checkpoints/sam2.1_hiera_small.pt"
 # SAM_CONFIG_FILEPATH = "./configs/samurai/sam2.1_hiera_s.yaml"
 DEVICE = 'cuda:0'
-VIDEO_PATH = "./videos/camera_switch.mp4"
+VIDEO_PATH = "./videos/camera_switch2.mp4"
 #VIDEO_PATH = "http://stage-ams-nfs.srv.axds.co/stream/adaptive/ucsc/walton_lighthouse/hls.m3u8"
 
 # =====================
@@ -125,6 +126,17 @@ def main():
     mask_site_a = json_to_mask(mask_json_site_a, prompt_img_site_a.shape)
     mask_site_a = np.expand_dims(np.expand_dims(mask_site_a.astype(np.float32), axis=0), axis=0)  # Convert to float32 and shape (1, 1, H, W)
 
+    prompt_img_site_b = cv2.imread("./masks/walton_lighthouse-2025-05-13-233327Z.jpg")
+    prompt_img_site_b = cv2.cvtColor(prompt_img_site_b, cv2.COLOR_BGR2RGB)
+
+    mask_json_site_b = "./masks/walton_lighthouse-2025-05-13-233327Z.json"
+    mask_site_b = json_to_mask(mask_json_site_b, prompt_img_site_a.shape)
+    mask_site_b = np.expand_dims(np.expand_dims(mask_site_b.astype(np.float32), axis=0), axis=0)  # Convert to float32 and shape (1, 1, H, W)
+
+    print(f"Image shape: {prompt_img_site_a.shape}")  # Should be (H,W,3)
+    print(f"Mask shape: {mask_site_a.shape}")        # Should be (1,1,H,W)
+    assert prompt_img_site_a.shape[:2] == mask_site_a.shape[2:], "Shape mismatch!"
+
     rock_mask_json = "./region/walton_lighthouse-2025-05-13-231928Z.json"
     rock_mask =  json_to_mask(rock_mask_json, prompt_img_site_a.shape)
     rock_mask = np.expand_dims(np.expand_dims(rock_mask.astype(np.float32), axis=0), axis=0)  # Convert to float32 and shape (1, 1, H, W)
@@ -145,28 +157,13 @@ def main():
 
             if first_frame:
                 print("First frame: initializing with bounding box prompt.")
-                sam_out = sam.track_new_object(img=img, box=bbox)
-                #sam_out = sam.track_new_object(img=prompt_img_site_a, mask=mask_site_a)
+                #sam_out = sam.track_new_object(img=img, box=bbox)
+                sam_out = sam.track_new_object(img=prompt_img_site_b, mask=mask_site_b)
 
-                # # Resize rock mask to match predicted mask shape
-                # pred_shape = sam_out["pred_masks"].shape[-2:]  # (H, W)
-                # rock_mask_resized = resize_rock_mask_for_prediction(rock_mask, pred_shape, device=DEVICE)
-
-                # # Remove detections in rock region
-                # sam_out["pred_masks"] = sam_out["pred_masks"].clone()
-                # sam_out["pred_masks"][:, :, rock_mask_resized.bool()[0, 0]] = 0
                 first_frame = False
             else:
                 if not object_lost:
                     sam_out = sam.track_all_objects(img=img)
-
-                    # # Resize rock mask to match predicted mask shape
-                    # pred_shape = sam_out["pred_masks"].shape[-2:]  # (H, W)
-                    # rock_mask_resized = resize_rock_mask_for_prediction(rock_mask, pred_shape, device=DEVICE)
-
-                    # # Remove detections in rock region
-                    # sam_out["pred_masks"] = sam_out["pred_masks"].clone()
-                    # sam_out["pred_masks"][:, :, rock_mask_resized.bool()[0, 0]] = 0
 
                     # Check if mask is lost
                     if is_mask_lost(sam_out["pred_masks"]):
@@ -187,16 +184,8 @@ def main():
                             device=DEVICE,
                             verbose=False
                         )
-                        sam_out = sam.track_new_object(img=img, box=bbox)
-
-                        # # Resize rock mask to match predicted mask shape
-                        # pred_shape = sam_out["pred_masks"].shape[-2:]  # (H, W)
-                        # rock_mask_resized = resize_rock_mask_for_prediction(rock_mask, pred_shape, device=DEVICE)
-
-                        # # Remove detections in rock region
-                        # sam_out["pred_masks"] = sam_out["pred_masks"].clone()
-                        # sam_out["pred_masks"][:, :, rock_mask_resized.bool()[0, 0]] = 0
-
+                        #sam_out = sam.track_new_object(img=img, box=bbox)
+                        sam_out = sam.track_new_object(img=prompt_img_site_a, mask=mask_site_a)
                         object_lost = False
                         frames_since_loss = 0
                     else:
@@ -206,23 +195,42 @@ def main():
                                                     dtype=torch.bfloat16, device=DEVICE)
             }
 
+            # Convert rock_mask to tensor and ensure proper shape
+            rock_mask_tensor = torch.from_numpy(rock_mask).float().to(DEVICE)
+
+            # Resize rock mask to match predicted mask dimensions
+            pred_mask_shape = sam_out["pred_masks"].shape[-2:]  # Get (H,W) of prediction
+            rock_mask_resized = F.interpolate(
+                rock_mask_tensor,
+                size=pred_mask_shape,
+                mode='bilinear',
+                align_corners=False
+            )
+
+            # Ensure both masks have same batch dimension
+            if rock_mask_resized.shape[0] != sam_out["pred_masks"].shape[0]:
+                rock_mask_resized = rock_mask_resized.expand_as(sam_out["pred_masks"])
+
+            # Apply rock mask to predictions
+            sam_out["pred_masks"] = torch.where(
+                rock_mask_resized > 0.5,
+                torch.ones_like(sam_out["pred_masks"]),
+                sam_out["pred_masks"]
+            )
+
+            # Optional: Clean up small holes
+            #final_mask = sam_out["pred_masks"](sam_out["pred_masks"][0,0].cpu().numpy())
+
             # Overlay segmentation mask and rock mask
             frame_with_mask = visualizer.overlay_mask(
                 frame, 
                 sam_out["pred_masks"], 
-                rock_mask=rock_mask  # Pass the rock mask here
+                rock_mask=None  # Pass the rock mask here
             )
             frame_with_mask = cv2.resize(frame_with_mask, (1280, 960))
             cv2.namedWindow('SAM2 Realtime Tracking', cv2.WINDOW_NORMAL)
             cv2.resizeWindow('SAM2 Realtime Tracking', 1280, 960)
             cv2.imshow("SAM2 Realtime Tracking", frame_with_mask)
-
-            # Overlay segmentation mask
-            # frame_with_mask = visualizer.overlay_mask(frame, sam_out["pred_masks"])
-            # frame_with_mask = cv2.resize(frame_with_mask, (1280, 960))
-            # cv2.namedWindow('SAM2 Realtime Tracking', cv2.WINDOW_NORMAL)
-            # cv2.resizeWindow('SAM2 Realtime Tracking', 1280, 960)
-            # cv2.imshow("SAM2 Realtime Tracking", frame_with_mask)
 
             # Exit on 'q' key
             if cv2.waitKey(1) & 0xFF == ord('q'):
