@@ -75,7 +75,10 @@ def fine_tune_sam(sam, images, masks, epochs=4, lr=3e-5, batch_size=2):
     Fine-tuning function specifically adapted for the provided ImageEncoder structure
     """
     device = sam.device
-    criterion = nn.BCEWithLogitsLoss()
+    # Estimate this from your dataset
+    pos_weight = torch.tensor([10.0], device=device)  # tweak as needed
+    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+
     optimizer = optim.AdamW(sam.sam_mask_decoder.parameters(), lr=lr)
     scaler = torch.cuda.amp.GradScaler()
     accum_steps = 2
@@ -94,7 +97,7 @@ def fine_tune_sam(sam, images, masks, epochs=4, lr=3e-5, batch_size=2):
             img = images[i]
             mask = masks[i]
             
-            img_tensor = torch.from_numpy(img).permute(2,0,1).unsqueeze(0).float().to(device)
+            img_tensor = torch.from_numpy(img).permute(2, 0, 1).unsqueeze(0).float().to(device) / 255.0
             mask_tensor = torch.from_numpy(mask).unsqueeze(0).unsqueeze(0).float().to(device)
             
             # Generate embeddings
@@ -114,13 +117,15 @@ def fine_tune_sam(sam, images, masks, epochs=4, lr=3e-5, batch_size=2):
                 # Get positional encoding for prompt encoder
                 image_pe = prompt_encoder.get_dense_pe()
 
-                # Prepare mask prompts
                 mask_input = F.interpolate(
                     mask_tensor,
                     size=prompt_encoder.mask_input_size,
                     mode="bilinear",
                     align_corners=False
                 )
+
+                cv2.imwrite("prompt_mask_input.jpg", (mask_input.squeeze().cpu().numpy() * 255).astype(np.uint8))
+
                 sparse_embeddings, dense_embeddings = prompt_encoder(
                     points=None,
                     boxes=None,
@@ -147,11 +152,12 @@ def fine_tune_sam(sam, images, masks, epochs=4, lr=3e-5, batch_size=2):
                 target_mask = F.interpolate(
                     mask_tensor,
                     size=outputs.shape[-2:],  # usually (256, 256)
-                    mode="nearest"  # ← important
+                    mode="bilinear",
+                    align_corners=False
                 )
 
                 loss = criterion(outputs, target_mask) / accum_steps
-            
+
             # Backward pass and optimization
             scaler.scale(loss).backward()
             epoch_loss += loss.item() * accum_steps
@@ -177,7 +183,7 @@ def predict_shoreline(model, image):
     if isinstance(image, str):
         image = cv2.cvtColor(cv2.imread(image), cv2.COLOR_BGR2RGB)
     
-    img_tensor = torch.from_numpy(image).permute(2,0,1).unsqueeze(0).float().cuda()
+    img_tensor = torch.from_numpy(image).permute(2,0,1).unsqueeze(0).float().cuda() / 255.0
     
     with torch.no_grad(), torch.cuda.amp.autocast():
         # Get features from encoder
@@ -192,9 +198,6 @@ def predict_shoreline(model, image):
         feat_s1 = sam.sam_mask_decoder.conv_s1(features[1])
         high_res_features = [feat_s0, feat_s1]
 
-
-
-        
         # Get other components
         image_pe = model.sam_prompt_encoder.get_dense_pe()
         sparse_embeddings, dense_embeddings = model.sam_prompt_encoder(
@@ -214,6 +217,8 @@ def predict_shoreline(model, image):
             high_res_features=high_res_features  # must be 64-channel tensors
         )[0]
         
+        print(f"Mask values - Min: {outputs.min().item():.3f}, Max: {outputs.max().item():.3f}, Mean: {outputs.mean().item():.3f}")
+
         pred_mask = (torch.sigmoid(outputs) > 0.5).cpu().numpy()[0,0]
     
     return pred_mask
@@ -236,6 +241,19 @@ if __name__ == "__main__":
         base_path="./train",
         sites=["site_a", "site_b"]  # Add your site folders here
     )
+
+    # Add this check after loading data
+    img, mask = train_images[0], train_masks[0]
+    print(f"Image shape: {img.shape}, Mask shape: {mask.shape}")
+    print(f"Mask unique values: {np.unique(mask)}")  # Should be [0, 1]
+
+    # Visualize a training sample
+    cv2.imshow("Training Sample", np.hstack([
+        img,
+        cv2.cvtColor(mask*255, cv2.COLOR_GRAY2RGB)
+    ]))
+    cv2.waitKey(3000)
+    cv2.destroyAllWindows()
     
     # Verify GPU
     print("\nPre-training GPU status:")
