@@ -869,8 +869,6 @@ class SAM2ObjectTracker(SAM2Base):
         else:
             raise ValueError(f"Unsupported mask shape: {mask.shape}")
 
-        print("DEBUG: final mask shape before interpolate =", mask.shape)
-
         num_masks, mask_H, mask_W = mask.shape[0], mask.shape[2], mask.shape[3]
 
         if mask_H != self.image_size or mask_W != self.image_size:

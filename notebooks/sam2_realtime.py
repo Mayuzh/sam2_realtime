@@ -5,7 +5,7 @@ import numpy as np
 import torch
 import json
 from sam2.build_sam import build_sam2_object_tracker
-import torch.nn.functional as F  # Add this import at the top
+import torch.nn.functional as F  
 
 # =====================
 # Config
@@ -17,7 +17,7 @@ SAM_CONFIG_FILEPATH = "./configs/samurai/sam2.1_hiera_b+.yaml"
 # SAM_CHECKPOINT_FILEPATH = "../checkpoints/sam2.1_hiera_small.pt"
 # SAM_CONFIG_FILEPATH = "./configs/samurai/sam2.1_hiera_s.yaml"
 DEVICE = 'cuda:0'
-VIDEO_PATH = "./videos/camera_switch2.mp4"
+VIDEO_PATH = "./videos/walton_lighthouse-2025-05-15-221132Z.mp4"
 #VIDEO_PATH = "http://stage-ams-nfs.srv.axds.co/stream/adaptive/ucsc/walton_lighthouse/hls.m3u8"
 
 # =====================
@@ -113,6 +113,33 @@ def main():
         verbose=False
     )
 
+    # Check method availability
+    print("\nAvailable fine-tuning methods:")
+    print([m for m in dir(sam) if 'fine' in m.lower() or 'tune' in m.lower()])
+
+    # Check if mask decoder is accessible
+    if hasattr(sam, 'sam_mask_decoder'):
+        print("\nMask decoder found at:", sam.sam_mask_decoder.__class__)
+        print("Trainable parameters:", 
+            [n for n,_ in sam.sam_mask_decoder.named_parameters()])
+    
+    # ===== KALMAN FILTER ADJUSTMENT =====
+    # try:
+    #     if hasattr(sam, 'kf'):
+    #         # Try common parameter names
+    #         for attr in ['process_variance', 'Q']:
+    #             if hasattr(sam.kf, attr):
+    #                 setattr(sam.kf, attr, getattr(sam.kf, attr) * 2.0)
+            
+    #         for attr in ['measurement_variance', 'R']:
+    #             if hasattr(sam.kf, attr):
+    #                 setattr(sam.kf, attr, getattr(sam.kf, attr) * 0.5)
+                    
+    #         print("Successfully adjusted Kalman filter parameters")
+    # except Exception as e:
+    #     print(f"Couldn't adjust Kalman filter: {str(e)}")
+    # ====================================
+
     first_frame = True
     object_lost = False
     frames_since_loss = 0
@@ -133,10 +160,6 @@ def main():
     mask_site_b = json_to_mask(mask_json_site_b, prompt_img_site_a.shape)
     mask_site_b = np.expand_dims(np.expand_dims(mask_site_b.astype(np.float32), axis=0), axis=0)  # Convert to float32 and shape (1, 1, H, W)
 
-    print(f"Image shape: {prompt_img_site_a.shape}")  # Should be (H,W,3)
-    print(f"Mask shape: {mask_site_a.shape}")        # Should be (1,1,H,W)
-    assert prompt_img_site_a.shape[:2] == mask_site_a.shape[2:], "Shape mismatch!"
-
     rock_mask_json = "./region/walton_lighthouse-2025-05-13-231928Z.json"
     rock_mask =  json_to_mask(rock_mask_json, prompt_img_site_a.shape)
     rock_mask = np.expand_dims(np.expand_dims(rock_mask.astype(np.float32), axis=0), axis=0)  # Convert to float32 and shape (1, 1, H, W)
@@ -156,7 +179,7 @@ def main():
             img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
             if first_frame:
-                print("First frame: initializing with bounding box prompt.")
+                print("First frame: initializing with mask prompt.")
                 #sam_out = sam.track_new_object(img=img, box=bbox)
                 sam_out = sam.track_new_object(img=prompt_img_site_b, mask=mask_site_b)
 
@@ -175,7 +198,7 @@ def main():
                     print(f"Waiting... {frames_since_loss}/{RETRY_FRAMES} frames since loss.")
                     
                     if frames_since_loss >= RETRY_FRAMES:
-                        print("Reinitializing with bounding box prompt.")
+                        print("Reinitializing with mask prompt.")
                         torch.cuda.empty_cache()
                         sam = build_sam2_object_tracker(
                             num_objects=NUM_OBJECTS,

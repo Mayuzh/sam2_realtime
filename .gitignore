@@ -9,3 +9,5 @@ _C.*
 outputs/*
 checkpoints/*.pt
 *.idea
+/notebooks/masks/
+/notebooks/train/
