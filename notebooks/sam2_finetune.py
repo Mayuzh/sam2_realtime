@@ -124,7 +124,7 @@ def fine_tune_sam(sam, images, masks, epochs=4, lr=3e-5, batch_size=2):
                     align_corners=False
                 )
 
-                cv2.imwrite("prompt_mask_input.jpg", (mask_input.squeeze().cpu().numpy() * 255).astype(np.uint8))
+                cv2.imwrite("./training_output/prompt_mask_input1.jpg", (mask_input.squeeze().cpu().numpy() * 255).astype(np.uint8))
 
                 sparse_embeddings, dense_embeddings = prompt_encoder(
                     points=None,
@@ -272,7 +272,7 @@ if __name__ == "__main__":
     
     # Save and test
     print("\nSaving tuned model...")
-    torch.save(tuned_sam.sam_mask_decoder.state_dict(), "tuned_shoreline_decoder.pth")
+    torch.save(tuned_sam.sam_mask_decoder.state_dict(), "./training_output/tuned_shoreline_decoder1.pth")
     
     # Quick test
     test_img = train_images[0]  # Test on first training image
@@ -285,7 +285,7 @@ if __name__ == "__main__":
     # Stack and show
     combined = np.hstack([test_img, pred_mask_rgb])
     cv2.imshow("Test Prediction", combined)
-    cv2.imwrite("prediction_output.jpg", cv2.cvtColor(combined, cv2.COLOR_RGB2BGR))  # Save as JPEG
+    cv2.imwrite("./training_output/prediction_output1.jpg", cv2.cvtColor(combined, cv2.COLOR_RGB2BGR))  # Save as JPEG
 
     cv2.waitKey(3000)
     cv2.destroyAllWindows()

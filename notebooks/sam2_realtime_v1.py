@@ -113,25 +113,11 @@ def main():
         verbose=False
     )
 
-    # Check method availability
-    # print("\nAvailable fine-tuning methods:")
-    # print([m for m in dir(sam) if 'fine' in m.lower() or 'tune' in m.lower()])
-    # Check if mask decoder is accessible
-    # if hasattr(sam, 'sam_mask_decoder'):
-    #     print("\nMask decoder found at:", sam.sam_mask_decoder.__class__)
-    #     print("Trainable parameters:", 
-    #         [n for n,_ in sam.sam_mask_decoder.named_parameters()])
-    
-    # === LOAD FINE-TUNED DECODER ===
-    fine_tuned_weights_path = "./training_output/tuned_shoreline_decoder.pth"  # Use your actual path
-    sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
-    print("Loaded fine-tuned mask decoder weights.")
-
     first_frame = True
     object_lost = False
     frames_since_loss = 0
     RETRY_FRAMES = 100  # For 5 fps video, 5 seconds = 25 frames
-    #bbox = np.array([[[0, 580], [2560, 1920]]])  # Initial prompt region
+    # bbox = np.array([[[0, 580], [2560, 1920]]])  # Initial prompt region
 
     prompt_img_site_a = cv2.imread("./masks/walton_lighthouse-2025-05-13-231928Z.jpg")
     prompt_img_site_a = cv2.cvtColor(prompt_img_site_a, cv2.COLOR_BGR2RGB)
@@ -166,14 +152,14 @@ def main():
             img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
             H, W = img.shape[:2]
-            start_y = int(H / 3)
+            start_y = H - int((2 * H) / 3)
             bbox = np.array([[[0, start_y], [W, H]]])
 
             if first_frame:
                 print("First frame: initializing with mask prompt.")
-                sam_out = sam.track_new_object(img=img, box=bbox)
-                #sam_out = sam.track_new_object(img=prompt_img_site_b, mask=mask_site_b)
-
+                #sam_out = sam.track_new_object(img=img, box=bbox)
+                sam_out = sam.track_new_object(img=prompt_img_site_b, mask=mask_site_b)
+            
                 first_frame = False
             else:
                 if not object_lost:
@@ -199,11 +185,8 @@ def main():
                             verbose=False
                         )
 
-                        sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
-                        print("Re-loaded fine-tuned weights after reinitialization.")
-
-                        sam_out = sam.track_new_object(img=img, box=bbox)
-                        #sam_out = sam.track_new_object(img=prompt_img_site_a, mask=mask_site_a)
+                        #sam_out = sam.track_new_object(img=img, box=bbox)
+                        sam_out = sam.track_new_object(img=prompt_img_site_a, mask=mask_site_a)
                         object_lost = False
                         frames_since_loss = 0
                     else:
@@ -213,21 +196,21 @@ def main():
                                                     dtype=torch.bfloat16, device=DEVICE)
             }
 
-            # Convert rock_mask to tensor and ensure proper shape
-            rock_mask_tensor = torch.from_numpy(rock_mask).float().to(DEVICE)
+            # # Convert rock_mask to tensor and ensure proper shape
+            # rock_mask_tensor = torch.from_numpy(rock_mask).float().to(DEVICE)
 
-            # Resize rock mask to match predicted mask dimensions
-            pred_mask_shape = sam_out["pred_masks"].shape[-2:]  # Get (H,W) of prediction
-            rock_mask_resized = F.interpolate(
-                rock_mask_tensor,
-                size=pred_mask_shape,
-                mode='bilinear',
-                align_corners=False
-            )
+            # # Resize rock mask to match predicted mask dimensions
+            # pred_mask_shape = sam_out["pred_masks"].shape[-2:]  # Get (H,W) of prediction
+            # rock_mask_resized = F.interpolate(
+            #     rock_mask_tensor,
+            #     size=pred_mask_shape,
+            #     mode='bilinear',
+            #     align_corners=False
+            # )
 
-            # Ensure both masks have same batch dimension
-            if rock_mask_resized.shape[0] != sam_out["pred_masks"].shape[0]:
-                rock_mask_resized = rock_mask_resized.expand_as(sam_out["pred_masks"])
+            # # Ensure both masks have same batch dimension
+            # if rock_mask_resized.shape[0] != sam_out["pred_masks"].shape[0]:
+            #     rock_mask_resized = rock_mask_resized.expand_as(sam_out["pred_masks"])
 
             # Apply rock mask to predictions
             # sam_out["pred_masks"] = torch.where(
