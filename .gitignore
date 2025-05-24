@@ -11,3 +11,5 @@ checkpoints/*.pt
 *.idea
 /notebooks/masks/
 /notebooks/train/
+/notebooks/training_output/
+/notebooks/videos/

@@ -17,8 +17,8 @@ SAM_CONFIG_FILEPATH = "./configs/samurai/sam2.1_hiera_b+.yaml"
 # SAM_CHECKPOINT_FILEPATH = "../checkpoints/sam2.1_hiera_small.pt"
 # SAM_CONFIG_FILEPATH = "./configs/samurai/sam2.1_hiera_s.yaml"
 DEVICE = 'cuda:0'
-VIDEO_PATH = "./videos/walton_lighthouse-2025-05-15-221132Z.mp4"
-#VIDEO_PATH = "http://stage-ams-nfs.srv.axds.co/stream/adaptive/ucsc/walton_lighthouse/hls.m3u8"
+#VIDEO_PATH = "./videos/walton_lighthouse-2024-07-10-012212Z.mp4"
+VIDEO_PATH = "http://stage-ams-nfs.srv.axds.co/stream/adaptive/ucsc/walton_lighthouse/hls.m3u8"
 
 # =====================
 # Helpers
@@ -123,7 +123,7 @@ def main():
     #         [n for n,_ in sam.sam_mask_decoder.named_parameters()])
     
     # === LOAD FINE-TUNED DECODER ===
-    fine_tuned_weights_path = "./training_output/tuned_shoreline_decoder.pth"  # Use your actual path
+    fine_tuned_weights_path = "./training_output/tuned_shoreline_decoder1.pth"  # Use your actual path
     sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
     print("Loaded fine-tuned mask decoder weights.")
 
@@ -147,9 +147,11 @@ def main():
     mask_site_b = json_to_mask(mask_json_site_b, prompt_img_site_a.shape)
     mask_site_b = np.expand_dims(np.expand_dims(mask_site_b.astype(np.float32), axis=0), axis=0)  # Convert to float32 and shape (1, 1, H, W)
 
-    rock_mask_json = "./region/walton_lighthouse-2025-05-13-231928Z.json"
+    rock_mask_json = "./region/walton_lighthouse-2025-05-13-233327Z.json"
     rock_mask =  json_to_mask(rock_mask_json, prompt_img_site_a.shape)
     rock_mask = np.expand_dims(np.expand_dims(rock_mask.astype(np.float32), axis=0), axis=0)  # Convert to float32 and shape (1, 1, H, W)
+
+    last_mask = None
 
     with torch.inference_mode(), torch.autocast(DEVICE, dtype=torch.bfloat16):
         frame_idx = 0  # initialize frame counter
@@ -160,8 +162,8 @@ def main():
 
             # Skip every other frame
             frame_idx += 1
-            # if frame_idx % 5 != 0:
-            #     continue
+            if frame_idx % 5 != 0:
+                continue
 
             img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
@@ -171,8 +173,8 @@ def main():
 
             if first_frame:
                 print("First frame: initializing with mask prompt.")
-                sam_out = sam.track_new_object(img=img, box=bbox)
-                #sam_out = sam.track_new_object(img=prompt_img_site_b, mask=mask_site_b)
+                #sam_out = sam.track_new_object(img=img, box=bbox)
+                sam_out = sam.track_new_object(img=prompt_img_site_a, mask=mask_site_a)
 
                 first_frame = False
             else:
@@ -202,8 +204,8 @@ def main():
                         sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
                         print("Re-loaded fine-tuned weights after reinitialization.")
 
-                        sam_out = sam.track_new_object(img=img, box=bbox)
-                        #sam_out = sam.track_new_object(img=prompt_img_site_a, mask=mask_site_a)
+                        #sam_out = sam.track_new_object(img=img, box=bbox)
+                        sam_out = sam.track_new_object(img=prompt_img_site_b, mask=mask_site_b)
                         object_lost = False
                         frames_since_loss = 0
                     else:
@@ -212,6 +214,8 @@ def main():
                             "pred_masks": torch.zeros((1, 1, img.shape[0], img.shape[1]),
                                                     dtype=torch.bfloat16, device=DEVICE)
             }
+            last_mask = sam_out["pred_masks"]
+
 
             # Convert rock_mask to tensor and ensure proper shape
             rock_mask_tensor = torch.from_numpy(rock_mask).float().to(DEVICE)
@@ -230,11 +234,11 @@ def main():
                 rock_mask_resized = rock_mask_resized.expand_as(sam_out["pred_masks"])
 
             # Apply rock mask to predictions
-            # sam_out["pred_masks"] = torch.where(
-            #     rock_mask_resized > 0.5,
-            #     torch.ones_like(sam_out["pred_masks"]),
-            #     sam_out["pred_masks"]
-            # )
+            sam_out["pred_masks"] = torch.where(
+                rock_mask_resized > 0.5,
+                torch.ones_like(sam_out["pred_masks"]),
+                sam_out["pred_masks"]
+            )
 
             # Optional: Clean up small holes
             #final_mask = sam_out["pred_masks"](sam_out["pred_masks"][0,0].cpu().numpy())

@@ -70,6 +70,41 @@ def load_multi_site_data(base_path="./train", sites=["site_a", "site_b"]):
     print(f"Loaded {len(images)} images from {len(sites)} sites")
     return images, masks
 
+def apply_augmentations(img, mask):
+    # Horizontal flip
+    if np.random.rand() < 0.5:
+        img = np.fliplr(img).copy()
+        mask = np.fliplr(mask).copy()
+
+    # Slight brightness/contrast shift
+    if np.random.rand() < 0.3:
+        factor = 1.0 + (np.random.rand() - 0.5) * 0.2  # range [0.9, 1.1]
+        img = np.clip(img * factor, 0, 255).astype(np.uint8)
+
+    # Add light Gaussian noise
+    if np.random.rand() < 0.3:
+        noise = np.random.normal(0, 5, img.shape).astype(np.uint8)
+        img = np.clip(img + noise, 0, 255)
+
+    return img, mask
+
+def enhance_edges(img):
+    lab = cv2.cvtColor(img, cv2.COLOR_RGB2LAB)
+    l, a, b = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=2.0)
+    l = clahe.apply(l)
+    enhanced_img = cv2.merge((l, a, b))
+    return cv2.cvtColor(enhanced_img, cv2.COLOR_LAB2RGB)
+
+
+def compute_iou(pred, target, threshold=0.5):
+    pred_bin = (torch.sigmoid(pred) > threshold).float()
+    target_bin = (target > 0.5).float()
+    intersection = (pred_bin * target_bin).sum()
+    union = (pred_bin + target_bin - pred_bin * target_bin).sum()
+    return (intersection + 1e-6) / (union + 1e-6)
+
+
 def fine_tune_sam(sam, images, masks, epochs=4, lr=3e-5, batch_size=2):
     """
     Fine-tuning function specifically adapted for the provided ImageEncoder structure
@@ -90,12 +125,17 @@ def fine_tune_sam(sam, images, masks, epochs=4, lr=3e-5, batch_size=2):
     
     for epoch in range(epochs):
         epoch_loss = 0
+        total_iou = 0
         optimizer.zero_grad()
         
         for i in tqdm(range(len(images)), desc=f"Epoch {epoch+1}/{epochs}"):
             # Prepare inputs
             img = images[i]
             mask = masks[i]
+
+            img, mask = apply_augmentations(img, mask)
+
+            img = enhance_edges(img)
             
             img_tensor = torch.from_numpy(img).permute(2, 0, 1).unsqueeze(0).float().to(device) / 255.0
             mask_tensor = torch.from_numpy(mask).unsqueeze(0).unsqueeze(0).float().to(device)
@@ -158,6 +198,14 @@ def fine_tune_sam(sam, images, masks, epochs=4, lr=3e-5, batch_size=2):
 
                 loss = criterion(outputs, target_mask) / accum_steps
 
+                # Compute IoU per image
+                pred_mask_bin = (torch.sigmoid(outputs) > 0.5).float()
+                target_bin = (target_mask > 0.5).float()
+                intersection = (pred_mask_bin * target_bin).sum()
+                union = pred_mask_bin.sum() + target_bin.sum() - intersection
+                iou = (intersection / union.clamp(min=1e-6)).item()
+                total_iou += iou
+
             # Backward pass and optimization
             scaler.scale(loss).backward()
             epoch_loss += loss.item() * accum_steps
@@ -174,7 +222,9 @@ def fine_tune_sam(sam, images, masks, epochs=4, lr=3e-5, batch_size=2):
                 if i % 2 == 0:
                     print_gpu_utilization()
         
-        print(f"Epoch {epoch+1} Loss: {epoch_loss/len(images):.4f}")
+        avg_loss = epoch_loss / len(images)
+        avg_iou = total_iou / len(images)
+        print(f"Epoch {epoch+1} | Loss: {avg_loss:.4f} | Mean IoU: {avg_iou:.4f}")
     
     return sam
 
@@ -265,10 +315,11 @@ if __name__ == "__main__":
         sam,
         train_images,
         train_masks,
-        epochs=4,
+        epochs=20, 
         lr=3e-5,
-        batch_size=2
+        batch_size=4
     )
+
     
     # Save and test
     print("\nSaving tuned model...")
