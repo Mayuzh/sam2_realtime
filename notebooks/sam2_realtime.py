@@ -4,6 +4,8 @@ import cv2
 import numpy as np
 import torch
 import json
+from datetime import datetime
+import threading
 from sam2.build_sam import build_sam2_object_tracker
 import torch.nn.functional as F  
 
@@ -19,6 +21,16 @@ SAM_CONFIG_FILEPATH = "./configs/samurai/sam2.1_hiera_b+.yaml"
 DEVICE = 'cuda:0'
 #VIDEO_PATH = "./videos/walton_lighthouse-2024-07-10-012212Z.mp4"
 VIDEO_PATH = "http://stage-ams-nfs.srv.axds.co/stream/adaptive/ucsc/walton_lighthouse/hls.m3u8"
+
+# =====================
+# Streaming Globals
+# =====================
+latest_frame = None
+latest_frame_time = None
+capture_running = True
+lock = threading.Lock()
+retry_counter = 0
+max_retries = 5
 
 # =====================
 # Helpers
@@ -44,6 +56,35 @@ def json_to_mask(json_path, image_shape):
 
     return mask
 
+# =====================
+# Frame Capture Thread
+# =====================
+def frame_capture():
+    global latest_frame, latest_frame_time, cap, capture_running, retry_counter
+    stream_url = VIDEO_PATH
+    cap = cv2.VideoCapture(stream_url)
+    while capture_running:
+        now = datetime.now()
+        if now.hour < 7 or now.hour >= 19:
+            time.sleep(300)
+            continue
+
+        ret, frame = cap.read()
+        if ret:
+            with lock:
+                latest_frame = frame
+                latest_frame_time = time.time()
+            retry_counter = 0
+        else:
+            retry_counter += 1
+            print(f"[Capture Thread] Frame read failed ({retry_counter}/{max_retries})")
+            time.sleep(1)
+            if retry_counter >= max_retries:
+                print("[Capture Thread] Reinitializing stream...")
+                cap.release()
+                cap = cv2.VideoCapture(stream_url)
+                retry_counter = 0
+        time.sleep(0.01)
 
 # =====================
 # Visualization Class
@@ -89,22 +130,13 @@ class Visualizer:
 
         return frame
 
-
-
 # =====================
 # Main Logic
 # =====================
 def main():
-    video_stream = cv2.VideoCapture(VIDEO_PATH)
-    if not video_stream.isOpened():
-        print("Error: Unable to open video stream.")
-        return
+    global capture_running
 
-    height = int(video_stream.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    width = int(video_stream.get(cv2.CAP_PROP_FRAME_WIDTH))
-
-    visualizer = Visualizer(width, height)
-
+    print("Initializing SAM2...")
     sam = build_sam2_object_tracker(
         num_objects=NUM_OBJECTS,
         config_file=SAM_CONFIG_FILEPATH,
@@ -113,60 +145,63 @@ def main():
         verbose=False
     )
 
-    # Check method availability
-    # print("\nAvailable fine-tuning methods:")
-    # print([m for m in dir(sam) if 'fine' in m.lower() or 'tune' in m.lower()])
-    # Check if mask decoder is accessible
-    # if hasattr(sam, 'sam_mask_decoder'):
-    #     print("\nMask decoder found at:", sam.sam_mask_decoder.__class__)
-    #     print("Trainable parameters:", 
-    #         [n for n,_ in sam.sam_mask_decoder.named_parameters()])
-    
-    # === LOAD FINE-TUNED DECODER ===
-    fine_tuned_weights_path = "./training_output/tuned_shoreline_decoder1.pth"  # Use your actual path
+    fine_tuned_weights_path = "./training_output/tuned_shoreline_decoder1.pth"
     sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
     print("Loaded fine-tuned mask decoder weights.")
+
+    capture_thread = threading.Thread(target=frame_capture)
+    capture_thread.start()
 
     first_frame = True
     object_lost = False
     frames_since_loss = 0
-    RETRY_FRAMES = 100  # For 5 fps video, 5 seconds = 25 frames
-    #bbox = np.array([[[0, 580], [2560, 1920]]])  # Initial prompt region
+    RETRY_FRAMES = 100
 
     prompt_img_site_a = cv2.imread("./masks/walton_lighthouse-2025-05-13-231928Z.jpg")
     prompt_img_site_a = cv2.cvtColor(prompt_img_site_a, cv2.COLOR_BGR2RGB)
-
     mask_json_site_a = "./masks/walton_lighthouse-2025-05-13-231928Z.json"
     mask_site_a = json_to_mask(mask_json_site_a, prompt_img_site_a.shape)
-    mask_site_a = np.expand_dims(np.expand_dims(mask_site_a.astype(np.float32), axis=0), axis=0)  # Convert to float32 and shape (1, 1, H, W)
+    mask_site_a = np.expand_dims(np.expand_dims(mask_site_a.astype(np.float32), axis=0), axis=0)
 
     prompt_img_site_b = cv2.imread("./masks/walton_lighthouse-2025-05-13-233327Z.jpg")
     prompt_img_site_b = cv2.cvtColor(prompt_img_site_b, cv2.COLOR_BGR2RGB)
-
     mask_json_site_b = "./masks/walton_lighthouse-2025-05-13-233327Z.json"
     mask_site_b = json_to_mask(mask_json_site_b, prompt_img_site_a.shape)
-    mask_site_b = np.expand_dims(np.expand_dims(mask_site_b.astype(np.float32), axis=0), axis=0)  # Convert to float32 and shape (1, 1, H, W)
+    mask_site_b = np.expand_dims(np.expand_dims(mask_site_b.astype(np.float32), axis=0), axis=0)
 
     rock_mask_json = "./region/walton_lighthouse-2025-05-13-233327Z.json"
-    rock_mask =  json_to_mask(rock_mask_json, prompt_img_site_a.shape)
-    rock_mask = np.expand_dims(np.expand_dims(rock_mask.astype(np.float32), axis=0), axis=0)  # Convert to float32 and shape (1, 1, H, W)
+    rock_mask = json_to_mask(rock_mask_json, prompt_img_site_a.shape)
+    rock_mask = np.expand_dims(np.expand_dims(rock_mask.astype(np.float32), axis=0), axis=0)
 
     last_mask = None
 
-    with torch.inference_mode(), torch.autocast(DEVICE, dtype=torch.bfloat16):
-        frame_idx = 0  # initialize frame counter
-        while video_stream.isOpened():
-            ret, frame = video_stream.read()
-            if not ret:
-                break
+    desired_fps = 30
+    frame_interval = 1.0 / desired_fps
+    last_processed_time = 0
 
-            # Skip every other frame
-            frame_idx += 1
-            if frame_idx % 5 != 0:
+    visualizer = Visualizer(1280, 960)
+
+    with torch.inference_mode(), torch.autocast(DEVICE, dtype=torch.bfloat16):
+        while True:
+            now = datetime.now()
+            if now.hour < 7 or now.hour >= 19:
+                print("STREAM OFF: Outside operational hours (7 AM to 7 PM).")
+                time.sleep(300)
                 continue
 
-            img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            with lock:
+                frame = latest_frame.copy() if latest_frame is not None else None
+                frame_time = latest_frame_time if latest_frame_time is not None else 0
 
+            if frame is None:
+                print("No frame available, skipping...")
+                continue
+
+            if frame_time - last_processed_time < frame_interval:
+                continue
+            last_processed_time = frame_time
+
+            img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             H, W = img.shape[:2]
             start_y = int(H / 3)
             bbox = np.array([[[0, start_y], [W, H]]])
@@ -175,13 +210,10 @@ def main():
                 print("First frame: initializing with mask prompt.")
                 #sam_out = sam.track_new_object(img=img, box=bbox)
                 sam_out = sam.track_new_object(img=prompt_img_site_a, mask=mask_site_a)
-
                 first_frame = False
             else:
                 if not object_lost:
                     sam_out = sam.track_all_objects(img=img)
-
-                    # Check if mask is lost
                     if is_mask_lost(sam_out["pred_masks"]):
                         print("Object lost — starting recovery countdown.")
                         object_lost = True
@@ -189,7 +221,7 @@ def main():
                 else:
                     frames_since_loss += 1
                     print(f"Waiting... {frames_since_loss}/{RETRY_FRAMES} frames since loss.")
-                    
+
                     if frames_since_loss >= RETRY_FRAMES:
                         print("Reinitializing with mask prompt.")
                         torch.cuda.empty_cache()
@@ -200,65 +232,53 @@ def main():
                             device=DEVICE,
                             verbose=False
                         )
-
                         sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
                         print("Re-loaded fine-tuned weights after reinitialization.")
-
                         #sam_out = sam.track_new_object(img=img, box=bbox)
                         sam_out = sam.track_new_object(img=prompt_img_site_b, mask=mask_site_b)
                         object_lost = False
                         frames_since_loss = 0
                     else:
-                        # Keep placeholder mask during cooldown
                         sam_out = {
                             "pred_masks": torch.zeros((1, 1, img.shape[0], img.shape[1]),
-                                                    dtype=torch.bfloat16, device=DEVICE)
-            }
+                                dtype=torch.bfloat16, device=DEVICE)
+                        }
+
             last_mask = sam_out["pred_masks"]
 
-
-            # Convert rock_mask to tensor and ensure proper shape
             rock_mask_tensor = torch.from_numpy(rock_mask).float().to(DEVICE)
-
-            # Resize rock mask to match predicted mask dimensions
-            pred_mask_shape = sam_out["pred_masks"].shape[-2:]  # Get (H,W) of prediction
+            pred_mask_shape = sam_out["pred_masks"].shape[-2:]
             rock_mask_resized = F.interpolate(
                 rock_mask_tensor,
                 size=pred_mask_shape,
                 mode='bilinear',
                 align_corners=False
             )
-
-            # Ensure both masks have same batch dimension
             if rock_mask_resized.shape[0] != sam_out["pred_masks"].shape[0]:
                 rock_mask_resized = rock_mask_resized.expand_as(sam_out["pred_masks"])
 
-            # Apply rock mask to predictions
             sam_out["pred_masks"] = torch.where(
                 rock_mask_resized > 0.5,
                 torch.ones_like(sam_out["pred_masks"]),
                 sam_out["pred_masks"]
             )
 
-            # Optional: Clean up small holes
-            #final_mask = sam_out["pred_masks"](sam_out["pred_masks"][0,0].cpu().numpy())
-
-            # Overlay segmentation mask and rock mask
             frame_with_mask = visualizer.overlay_mask(
-                frame, 
-                sam_out["pred_masks"], 
-                rock_mask=None  # Pass the rock mask here
+                frame,
+                sam_out["pred_masks"],
+                rock_mask=None
             )
             frame_with_mask = cv2.resize(frame_with_mask, (1280, 960))
             cv2.namedWindow('SAM2 Realtime Tracking', cv2.WINDOW_NORMAL)
             cv2.resizeWindow('SAM2 Realtime Tracking', 1280, 960)
             cv2.imshow("SAM2 Realtime Tracking", frame_with_mask)
 
-            # Exit on 'q' key
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
 
-    video_stream.release()
+    capture_running = False
+    capture_thread.join()
+    cap.release()
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":
