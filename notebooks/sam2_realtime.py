@@ -19,7 +19,7 @@ SAM_CONFIG_FILEPATH = "./configs/samurai/sam2.1_hiera_b+.yaml"
 # SAM_CHECKPOINT_FILEPATH = "../checkpoints/sam2.1_hiera_small.pt"
 # SAM_CONFIG_FILEPATH = "./configs/samurai/sam2.1_hiera_s.yaml"
 DEVICE = 'cuda:0'
-#VIDEO_PATH = "./videos/walton_lighthouse-2024-07-10-012212Z.mp4"
+#VIDEO_PATH = "./videos/walton_lighthouse-2024-07-09-194220Z.mp4"
 VIDEO_PATH = "http://stage-ams-nfs.srv.axds.co/stream/adaptive/ucsc/walton_lighthouse/hls.m3u8"
 
 # =====================
@@ -155,7 +155,7 @@ def main():
     first_frame = True
     object_lost = False
     frames_since_loss = 0
-    RETRY_FRAMES = 100
+    RETRY_FRAMES = 80
 
     prompt_img_site_a = cv2.imread("./masks/walton_lighthouse-2025-05-13-231928Z.jpg")
     prompt_img_site_a = cv2.cvtColor(prompt_img_site_a, cv2.COLOR_BGR2RGB)
@@ -169,15 +169,15 @@ def main():
     mask_site_b = json_to_mask(mask_json_site_b, prompt_img_site_a.shape)
     mask_site_b = np.expand_dims(np.expand_dims(mask_site_b.astype(np.float32), axis=0), axis=0)
 
-    rock_mask_json = "./region/walton_lighthouse-2025-05-13-233327Z.json"
+    rock_mask_json = "./region/walton_lighthouse-2025-05-13-231928Z.json"
     rock_mask = json_to_mask(rock_mask_json, prompt_img_site_a.shape)
     rock_mask = np.expand_dims(np.expand_dims(rock_mask.astype(np.float32), axis=0), axis=0)
 
-    last_mask = None
-
-    desired_fps = 30
+    desired_fps = 10
     frame_interval = 1.0 / desired_fps
     last_processed_time = 0
+    frame_counter = 0
+    RESTART_INTERVAL = 500  # frames
 
     visualizer = Visualizer(1280, 960)
 
@@ -200,8 +200,11 @@ def main():
             if frame_time - last_processed_time < frame_interval:
                 continue
             last_processed_time = frame_time
+            frame_counter += 1
 
             img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            img_for_detection = cv2.GaussianBlur(img, (131, 131), 0)
+            #img_for_detection = img
             H, W = img.shape[:2]
             start_y = int(H / 3)
             bbox = np.array([[[0, start_y], [W, H]]])
@@ -209,11 +212,29 @@ def main():
             if first_frame:
                 print("First frame: initializing with mask prompt.")
                 #sam_out = sam.track_new_object(img=img, box=bbox)
-                sam_out = sam.track_new_object(img=prompt_img_site_a, mask=mask_site_a)
+                current_img = prompt_img_site_b
+                current_mask = mask_site_b
+                sam_out = sam.track_new_object(img=current_img, mask=current_mask)
                 first_frame = False
             else:
                 if not object_lost:
-                    sam_out = sam.track_all_objects(img=img)
+                    #sam_out = sam.track_all_objects(img=img_for_detection)
+                    # Restart detection using mask prompt every RESTART_INTERVAL frames
+                    if frame_counter % RESTART_INTERVAL == 0:
+                        print(f"Frame {frame_counter}: Periodic reinitialization with mask prompt.")
+                        torch.cuda.empty_cache()
+                        sam = build_sam2_object_tracker(
+                            num_objects=NUM_OBJECTS,
+                            config_file=SAM_CONFIG_FILEPATH,
+                            ckpt_path=SAM_CHECKPOINT_FILEPATH,
+                            device=DEVICE,
+                            verbose=False
+                        )
+                        sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
+                        sam_out = sam.track_new_object(img=current_img, mask=current_mask)
+                    else:
+                        sam_out = sam.track_all_objects(img=img_for_detection)
+
                     if is_mask_lost(sam_out["pred_masks"]):
                         print("Object lost — starting recovery countdown.")
                         object_lost = True
@@ -235,7 +256,9 @@ def main():
                         sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
                         print("Re-loaded fine-tuned weights after reinitialization.")
                         #sam_out = sam.track_new_object(img=img, box=bbox)
-                        sam_out = sam.track_new_object(img=prompt_img_site_b, mask=mask_site_b)
+                        current_img = prompt_img_site_a
+                        current_mask = mask_site_a
+                        sam_out = sam.track_new_object(img=current_img, mask=current_mask)
                         object_lost = False
                         frames_since_loss = 0
                     else:
@@ -243,8 +266,6 @@ def main():
                             "pred_masks": torch.zeros((1, 1, img.shape[0], img.shape[1]),
                                 dtype=torch.bfloat16, device=DEVICE)
                         }
-
-            last_mask = sam_out["pred_masks"]
 
             rock_mask_tensor = torch.from_numpy(rock_mask).float().to(DEVICE)
             pred_mask_shape = sam_out["pred_masks"].shape[-2:]
@@ -263,7 +284,9 @@ def main():
                 sam_out["pred_masks"]
             )
 
+
             frame_with_mask = visualizer.overlay_mask(
+                #img_for_detection,
                 frame,
                 sam_out["pred_masks"],
                 rock_mask=None
