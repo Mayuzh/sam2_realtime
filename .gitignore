@@ -13,3 +13,4 @@ checkpoints/*.pt
 /notebooks/train/
 /notebooks/training_output/
 /notebooks/videos/
+/notebooks/shoreline_jsons/

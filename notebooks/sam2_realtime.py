@@ -86,6 +86,45 @@ def frame_capture():
                 retry_counter = 0
         time.sleep(0.01)
 
+# Helper: Write LabelMe JSON with edge-filtered polygon
+def write_labelme_json(image_path, coords, image_shape, label="shoreline", margin=10):
+    from __main__ import latest_frame  # pull the current frame from global
+    h, w = image_shape
+    filtered_coords = [
+        [float(x), float(y)]
+        for x, y in coords
+        if margin < x < (w - margin) and margin < y < (h - margin)
+    ]
+
+    shapes = [{
+        "label":      label,
+        "points":     filtered_coords,
+        "group_id":   None,
+        "shape_type": "polygon",
+        "flags":      {}
+    }]
+
+    data = {
+        "version":     "0.3.3",
+        "flags":       {},
+        "shapes":      shapes,
+        "imagePath":   os.path.basename(image_path),
+        "imageData":   None,
+        "imageHeight": h,
+        "imageWidth":  w,
+        "text":        ""
+    }
+
+    image_save_path = image_path
+    saved_image = cv2.resize(latest_frame, (1280, 960))
+    cv2.imwrite(image_save_path, saved_image)  # Save current frame image
+    json_path = os.path.splitext(image_save_path)[0] + ".json"
+
+    with open(json_path, "w") as f:
+        json.dump(data, f, indent=2)
+    print(f"[✓] Saved shoreline JSON: {json_path}")
+
+
 # =====================
 # Visualization Class
 # =====================
@@ -93,6 +132,7 @@ class Visualizer:
     def __init__(self, width, height):
         self.video_width = width
         self.video_height = height
+        self.saved_frame_count = 0
 
     def resize_mask(self, mask):
         mask = torch.tensor(mask, device='cpu')
@@ -104,7 +144,16 @@ class Visualizer:
         )
         return mask
 
-    def overlay_mask(self, frame, pred_masks, rock_mask=None):
+    def overlay_mask(
+        self,
+        frame,
+        pred_masks,
+        rock_mask=None,
+        save_shoreline_coords=False,
+        save_path=None,
+        max_save_frames=0,
+        frame_index=None  # optional, to help filename
+    ):
         frame = cv2.resize(frame, (self.video_width, self.video_height))
 
         # Resize prediction masks
@@ -121,6 +170,20 @@ class Visualizer:
             obj_mask = (pred_masks[i, 0, :, :] * 255).astype(np.uint8)
             contours, _ = cv2.findContours(obj_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             cv2.drawContours(frame, contours, -1, (0, 255, 0), thickness=2)  # Green boundary
+
+            if save_shoreline_coords and save_path and self.saved_frame_count < max_save_frames:
+                for cnt in contours:
+                    if len(cnt) > 2:
+                        coords = [(int(pt[0][0]), int(pt[0][1])) for pt in cnt]
+                        frame_name = f"shoreline_frame_{frame_index or self.saved_frame_count:04d}.png"
+                        json_image_path = os.path.join(save_path, frame_name)
+                        write_labelme_json(
+                            json_image_path,
+                            coords=coords,
+                            image_shape=(self.video_height, self.video_width)
+                        )
+                        self.saved_frame_count += 1
+                        break  # only save one valid contour per frame
 
         # Draw rock mask boundaries (red) if provided
         if rock_mask is not None:
@@ -203,7 +266,7 @@ def main():
             frame_counter += 1
 
             img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            img_for_detection = cv2.GaussianBlur(img, (131, 131), 0)
+            img_for_detection = cv2.GaussianBlur(img, (47, 47), 0)
             #img_for_detection = img
             H, W = img.shape[:2]
             start_y = int(H / 3)
@@ -284,13 +347,16 @@ def main():
                 sam_out["pred_masks"]
             )
 
-
             frame_with_mask = visualizer.overlay_mask(
-                #img_for_detection,
                 frame,
                 sam_out["pred_masks"],
-                rock_mask=None
+                rock_mask=None,
+                save_shoreline_coords=False,
+                save_path="./shoreline_jsons/test1",
+                max_save_frames=300,
+                frame_index=None  
             )
+
             frame_with_mask = cv2.resize(frame_with_mask, (1280, 960))
             cv2.namedWindow('SAM2 Realtime Tracking', cv2.WINDOW_NORMAL)
             cv2.resizeWindow('SAM2 Realtime Tracking', 1280, 960)
