@@ -2,7 +2,7 @@ import cv2
 import threading
 import time
 from datetime import datetime
-from utils.config import VIDEO_PATH
+from utils.config1 import VIDEO_PATH
 
 latest_frame = None
 latest_frame_time = None
@@ -17,9 +17,9 @@ def frame_capture():
     cap = cv2.VideoCapture(stream_url)
     while capture_running:
         now = datetime.now()
-        if now.hour < 7 or now.hour >= 19:
-            time.sleep(300)
-            continue
+        # if now.hour < 7 or now.hour >= 19:
+        #     time.sleep(300)
+        #     continue
         ret, frame = cap.read()
         if ret:
             with lock:

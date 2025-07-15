@@ -9,7 +9,7 @@ import threading
 from sam2.build_sam import build_sam2_object_tracker
 import torch.nn.functional as F
 
-from utils.config import *
+from utils.config2 import *
 from utils.helpers import is_mask_lost, json_to_mask, write_labelme_json
 import utils.streaming as streaming
 from utils.visualizer import Visualizer
@@ -26,7 +26,7 @@ def main():
         verbose=False
     )
 
-    fine_tuned_weights_path = "./training_output/tuned_shoreline_decoder1.pth"
+    fine_tuned_weights_path = "./finetuned_weights/tuned_shoreline_decoder.pth"
     sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
     print("Loaded fine-tuned mask decoder weights.")
 
@@ -37,19 +37,19 @@ def main():
     object_lost = False
     frames_since_loss = 0
 
-    prompt_img_site_a = cv2.imread("./masks/walton_lighthouse-2025-05-13-231928Z.jpg")
+    prompt_img_site_a = cv2.imread("./masks/tmmc_prls-2025-07-15-221433Z.jpg")
     prompt_img_site_a = cv2.cvtColor(prompt_img_site_a, cv2.COLOR_BGR2RGB)
-    mask_json_site_a = "./masks/walton_lighthouse-2025-05-13-231928Z.json"
+    mask_json_site_a = "./masks/tmmc_prls-2025-07-15-221433Z.json"
     mask_site_a = json_to_mask(mask_json_site_a, prompt_img_site_a.shape)
     mask_site_a = np.expand_dims(np.expand_dims(mask_site_a.astype(np.float32), axis=0), axis=0)
 
-    prompt_img_site_b = cv2.imread("./masks/walton_lighthouse-2025-05-13-233327Z.jpg")
+    prompt_img_site_b = cv2.imread("./masks/tmmc_prls-2025-07-15-221433Z.jpg")
     prompt_img_site_b = cv2.cvtColor(prompt_img_site_b, cv2.COLOR_BGR2RGB)
-    mask_json_site_b = "./masks/walton_lighthouse-2025-05-13-233327Z.json"
+    mask_json_site_b = "./masks/tmmc_prls-2025-07-15-221433Z.json"
     mask_site_b = json_to_mask(mask_json_site_b, prompt_img_site_a.shape)
     mask_site_b = np.expand_dims(np.expand_dims(mask_site_b.astype(np.float32), axis=0), axis=0)
 
-    rock_mask_json = "./region/walton_lighthouse-2025-05-13-231928Z.json"
+    rock_mask_json = "./region/tmmc_prls-2025-07-15-221433Z.json"
     rock_mask = json_to_mask(rock_mask_json, prompt_img_site_a.shape)
     rock_mask = np.expand_dims(np.expand_dims(rock_mask.astype(np.float32), axis=0), axis=0)
 
@@ -61,10 +61,10 @@ def main():
     with torch.inference_mode(), torch.autocast(DEVICE, dtype=torch.bfloat16):
         while True:
             now = datetime.now()
-            if now.hour < 7 or now.hour >= 19:
-                print("STREAM OFF: Outside operational hours (7 AM to 7 PM).")
-                time.sleep(300)
-                continue
+            # if now.hour < 7 or now.hour >= 19:
+            #     print("STREAM OFF: Outside operational hours (7 AM to 7 PM).")
+            #     time.sleep(300)
+            #     continue
 
             with streaming.lock:
                 frame = streaming.latest_frame.copy() if streaming.latest_frame is not None else None
@@ -80,7 +80,7 @@ def main():
             frame_counter += 1
 
             img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            img_for_detection = cv2.GaussianBlur(img, (47, 47), 0)
+            img_for_detection = cv2.GaussianBlur(img, (103, 103), 0)
             H, W = img.shape[:2]
             start_y = int(H / 3)
             bbox = np.array([[[0, start_y], [W, H]]])
