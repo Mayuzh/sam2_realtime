@@ -9,9 +9,9 @@ import threading
 from sam2.build_sam import build_sam2_object_tracker
 import torch.nn.functional as F
 
-from utils.config import *
+from utils.config3 import *
 from utils.helpers import is_mask_lost, json_to_mask, write_labelme_json
-import utils.streaming as streaming
+import utils.streaming3 as streaming
 from utils.visualizer import Visualizer
 
 def main():
@@ -26,9 +26,10 @@ def main():
         verbose=False
     )
 
-    fine_tuned_weights_path = "./finetuned_weights/tuned_shoreline_decoder.pth"
-    sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
-    print("Loaded fine-tuned mask decoder weights.")
+    # Commenting out loading of fine-tuned weights to use the original SAM2 model
+    # fine_tuned_weights_path = "./finetuned_weights/tuned_shoreline_decoder.pth"
+    # sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
+    # print("Loaded fine-tuned mask decoder weights.")
 
     capture_thread = threading.Thread(target=streaming.frame_capture)
     capture_thread.start()
@@ -37,19 +38,13 @@ def main():
     object_lost = False
     frames_since_loss = 0
 
-    prompt_img_site_a = cv2.imread("./masks/walton_lighthouse-2025-05-13-231928Z.jpg")
+    prompt_img_site_a = cv2.imread("./masks/jennette_north-2025-07-21-235641Z.jpg")
     prompt_img_site_a = cv2.cvtColor(prompt_img_site_a, cv2.COLOR_BGR2RGB)
-    mask_json_site_a = "./masks/walton_lighthouse-2025-05-13-231928Z.json"
+    mask_json_site_a = "./masks/jennette_north-2025-07-21-235641Z.json"
     mask_site_a = json_to_mask(mask_json_site_a, prompt_img_site_a.shape)
     mask_site_a = np.expand_dims(np.expand_dims(mask_site_a.astype(np.float32), axis=0), axis=0)
 
-    prompt_img_site_b = cv2.imread("./masks/walton_lighthouse-2025-05-13-233327Z.jpg")
-    prompt_img_site_b = cv2.cvtColor(prompt_img_site_b, cv2.COLOR_BGR2RGB)
-    mask_json_site_b = "./masks/walton_lighthouse-2025-05-13-233327Z.json"
-    mask_site_b = json_to_mask(mask_json_site_b, prompt_img_site_a.shape)
-    mask_site_b = np.expand_dims(np.expand_dims(mask_site_b.astype(np.float32), axis=0), axis=0)
-
-    rock_mask_json = "./region/walton_lighthouse-2025-05-13-231928Z.json"
+    rock_mask_json = "./region/tmmc_prls-2025-07-15-221433Z.json"
     rock_mask = json_to_mask(rock_mask_json, prompt_img_site_a.shape)
     rock_mask = np.expand_dims(np.expand_dims(rock_mask.astype(np.float32), axis=0), axis=0)
 
@@ -80,21 +75,27 @@ def main():
             frame_counter += 1
 
             img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            img_for_detection = cv2.GaussianBlur(img, (47, 47), 0)
+            img_for_detection = cv2.GaussianBlur(img, (3, 3), 0)
             H, W = img.shape[:2]
-            start_y = int(H / 3)
-            bbox = np.array([[[0, start_y], [W, H]]])
+            start_y = int(2 * H / 5)
+            start_x = int(W / 4)
+            #bbox = np.array([[[start_x, 0], [W, H]]])
 
             if first_frame:
-                print("First frame: initializing with mask prompt.")
-                current_img = prompt_img_site_b
-                current_mask = mask_site_b
-                sam_out = sam.track_new_object(img=current_img, mask=current_mask)
+                print("First frame: initializing with prompt points.")
+                current_img = prompt_img_site_a
+                #sam_out = sam.track_new_object(img=current_img, mask=current_mask)
+                point_coords = np.array([[start_x, start_y]])  # Example point coordinates
+                sam_out = sam.track_new_object(img=current_img, points=point_coords)  # Pass only point_coords
+
+                # Draw the prompt points directly on the output stream
+                for point in point_coords:
+                    cv2.circle(frame, tuple(point), radius=5, color=(0, 255, 0), thickness=-1)
                 first_frame = False
             else:
                 if not object_lost:
                     if frame_counter % RESTART_INTERVAL == 0:
-                        print(f"Frame {frame_counter}: Periodic reinitialization with mask prompt.")
+                        print(f"Frame {frame_counter}: Periodic reinitialization with prompt points.")
                         torch.cuda.empty_cache()
                         sam = build_sam2_object_tracker(
                             num_objects=NUM_OBJECTS,
@@ -103,8 +104,11 @@ def main():
                             device=DEVICE,
                             verbose=False
                         )
-                        sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
-                        sam_out = sam.track_new_object(img=current_img, mask=current_mask)
+                        sam_out = sam.track_new_object(img=current_img, points=point_coords)
+
+                        # Draw the prompt points directly on the output stream
+                        for point in point_coords:
+                            cv2.circle(frame, tuple(point), radius=5, color=(0, 255, 0), thickness=-1)
                     else:
                         sam_out = sam.track_all_objects(img=img_for_detection)
 
@@ -126,11 +130,12 @@ def main():
                             device=DEVICE,
                             verbose=False
                         )
-                        sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
+                        # sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
                         print("Re-loaded fine-tuned weights after reinitialization.")
                         current_img = prompt_img_site_a
-                        current_mask = mask_site_a
-                        sam_out = sam.track_new_object(img=current_img, mask=current_mask)
+                        #current_mask = mask_site_a
+
+                        sam_out = sam.track_new_object(img=current_img, points=point_coords)
                         object_lost = False
                         frames_since_loss = 0
                     else:
@@ -150,11 +155,11 @@ def main():
             if rock_mask_resized.shape[0] != sam_out["pred_masks"].shape[0]:
                 rock_mask_resized = rock_mask_resized.expand_as(sam_out["pred_masks"])
 
-            sam_out["pred_masks"] = torch.where(
-                rock_mask_resized > 0.5,
-                torch.ones_like(sam_out["pred_masks"]),
-                sam_out["pred_masks"]
-            )
+            # sam_out["pred_masks"] = torch.where(
+            #     rock_mask_resized > 0.5,
+            #     torch.ones_like(sam_out["pred_masks"]),
+            #     sam_out["pred_masks"]
+            # )
 
             frame_with_mask = visualizer.overlay_mask(
                 frame,
@@ -167,9 +172,9 @@ def main():
             )
 
             frame_with_mask = cv2.resize(frame_with_mask, (1280, 960))
-            cv2.namedWindow('SAM2 Realtime Tracking1', cv2.WINDOW_NORMAL)
-            cv2.resizeWindow('SAM2 Realtime Tracking1', 1280, 960)
-            cv2.imshow("SAM2 Realtime Tracking1", frame_with_mask)
+            cv2.namedWindow('SAM2 Realtime Tracking', cv2.WINDOW_NORMAL)
+            cv2.resizeWindow('SAM2 Realtime Tracking', 1280, 960)
+            cv2.imshow("SAM2 Realtime Tracking", frame_with_mask)
 
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break

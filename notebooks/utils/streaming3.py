@@ -2,7 +2,7 @@ import cv2
 import threading
 import time
 from datetime import datetime
-from utils.config import VIDEO_PATH
+from utils.config3 import VIDEO_PATH
 
 latest_frame = None
 latest_frame_time = None
