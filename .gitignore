@@ -14,3 +14,4 @@ checkpoints/*.pt
 /notebooks/training_output/
 /notebooks/videos/
 /notebooks/shoreline_jsons/
+model_predict/

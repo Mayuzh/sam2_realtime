@@ -37,26 +37,27 @@ def main():
     object_lost = False
     frames_since_loss = 0
 
-    prompt_img_site_a = cv2.imread("./masks/walton_lighthouse-2025-05-13-231928Z.jpg")
+    prompt_img_site_a = cv2.imread("./masks/walton_lighthouse-2024-11-16-194259Z.jpg")
     prompt_img_site_a = cv2.cvtColor(prompt_img_site_a, cv2.COLOR_BGR2RGB)
-    mask_json_site_a = "./masks/walton_lighthouse-2025-05-13-231928Z.json"
+    mask_json_site_a = "./masks/walton_lighthouse-2024-11-16-194259Z.json"
     mask_site_a = json_to_mask(mask_json_site_a, prompt_img_site_a.shape)
     mask_site_a = np.expand_dims(np.expand_dims(mask_site_a.astype(np.float32), axis=0), axis=0)
 
-    prompt_img_site_b = cv2.imread("./masks/walton_lighthouse-2025-05-13-233327Z.jpg")
+    prompt_img_site_b = cv2.imread("./masks/walton_lighthouse-2024-11-16-195057Z.jpg")
     prompt_img_site_b = cv2.cvtColor(prompt_img_site_b, cv2.COLOR_BGR2RGB)
-    mask_json_site_b = "./masks/walton_lighthouse-2025-05-13-233327Z.json"
-    mask_site_b = json_to_mask(mask_json_site_b, prompt_img_site_a.shape)
+    mask_json_site_b = "./masks/walton_lighthouse-2024-11-16-195057Z.json"
+    mask_site_b = json_to_mask(mask_json_site_b, prompt_img_site_b.shape)
     mask_site_b = np.expand_dims(np.expand_dims(mask_site_b.astype(np.float32), axis=0), axis=0)
 
-    rock_mask_json = "./region/walton_lighthouse-2025-05-13-231928Z.json"
+    rock_mask_json = "./region/walton_lighthouse-2024-11-16-194259Z.json"
     rock_mask = json_to_mask(rock_mask_json, prompt_img_site_a.shape)
     rock_mask = np.expand_dims(np.expand_dims(rock_mask.astype(np.float32), axis=0), axis=0)
 
     last_processed_time = 0
     frame_counter = 0
 
-    visualizer = Visualizer(1280, 960)
+    #visualizer = Visualizer(1280, 960)
+    visualizer = Visualizer(1440, 1080)
 
     with torch.inference_mode(), torch.autocast(DEVICE, dtype=torch.bfloat16):
         while True:
@@ -72,24 +73,29 @@ def main():
 
             if frame is None:
                 print("No frame available, skipping...")
-                continue
+                #continue
+                break
 
-            if frame_time - last_processed_time < FRAME_INTERVAL:
-                continue
+            # if frame_time - last_processed_time < FRAME_INTERVAL:
+            #     continue
             last_processed_time = frame_time
             frame_counter += 1
 
             img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            img_for_detection = cv2.GaussianBlur(img, (47, 47), 0)
+
+            img_for_detection = cv2.GaussianBlur(img, (15, 15), 0)
+
             H, W = img.shape[:2]
-            start_y = int(H / 3)
-            bbox = np.array([[[0, start_y], [W, H]]])
+            start_x = int(2 * W / 5)
+            start_y = int(3 * H / 5)
 
             if first_frame:
                 print("First frame: initializing with mask prompt.")
                 current_img = prompt_img_site_b
                 current_mask = mask_site_b
                 sam_out = sam.track_new_object(img=current_img, mask=current_mask)
+                #point_coords = np.array([[start_x, start_y]])  # Example point coordinates
+                #sam_out = sam.track_new_object(img=current_img, points=point_coords)  # Pass only point_coords
                 first_frame = False
             else:
                 if not object_lost:
@@ -128,8 +134,8 @@ def main():
                         )
                         sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
                         print("Re-loaded fine-tuned weights after reinitialization.")
-                        current_img = prompt_img_site_a
-                        current_mask = mask_site_a
+                        current_img = prompt_img_site_b
+                        current_mask = mask_site_b
                         sam_out = sam.track_new_object(img=current_img, mask=current_mask)
                         object_lost = False
                         frames_since_loss = 0
@@ -157,25 +163,35 @@ def main():
             )
 
             frame_with_mask = visualizer.overlay_mask(
+                #img_for_detection,
                 frame,
                 sam_out["pred_masks"],
                 rock_mask=None,
-                save_shoreline_coords=False,
-                save_path="./shoreline_jsons/test1",
-                max_save_frames=300,
+                save_shoreline_coords=True,
+                save_path="./shoreline_jsons/twinlakes/13",
+                max_save_frames=None,
                 frame_index=None
             )
 
-            frame_with_mask = cv2.resize(frame_with_mask, (1280, 960))
-            cv2.namedWindow('SAM2 Realtime Tracking1', cv2.WINDOW_NORMAL)
-            cv2.resizeWindow('SAM2 Realtime Tracking1', 1280, 960)
-            cv2.imshow("SAM2 Realtime Tracking1", frame_with_mask)
+            #frame_with_mask = cv2.resize(frame_with_mask, (1280, 960))
+            frame_with_mask = cv2.resize(frame_with_mask, (1440, 1080))
+            cv2.namedWindow('Santa Cruz', cv2.WINDOW_NORMAL)
+            cv2.resizeWindow('Santa Cruz', 1440, 1080)
+            #cv2.resizeWindow('Santa Cruz', 1280, 960)
+            cv2.imshow("Santa Cruz", frame_with_mask)
+
+            # Calculate and print the frame rate
+            if frame_time > last_processed_time:
+                frame_rate = 1 / (frame_time - last_processed_time)
+                print(f"Frame Rate: {frame_rate:.2f} FPS")
 
             if cv2.waitKey(1) & 0xFF == ord('q'):
+                streaming.capture_running = False  # Stop the capture thread
                 break
 
     streaming.capture_running = False
     capture_thread.join()
+    print("detroying windows...")
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":

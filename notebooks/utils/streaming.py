@@ -27,6 +27,8 @@ def frame_capture():
                 latest_frame_time = time.time()
             retry_counter = 0
         else:
+            latest_frame = None
+            break
             retry_counter += 1
             print(f"[Capture Thread] Frame read failed ({retry_counter}/{max_retries})")
             time.sleep(1)
@@ -36,4 +38,5 @@ def frame_capture():
                 cap = cv2.VideoCapture(stream_url)
                 retry_counter = 0
         time.sleep(0.01)
+
     cap.release()
