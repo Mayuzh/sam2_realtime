@@ -111,7 +111,7 @@ def main():
             frame_counter += 1
 
             img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            img_for_detection = cv2.GaussianBlur(img, (107, 107), 0)
+            img_for_detection = cv2.GaussianBlur(img, (7, 7), 0)
             H, W = img.shape[:2]
             start_y = int(H / 3)
             start_x = int(3 * W / 4)

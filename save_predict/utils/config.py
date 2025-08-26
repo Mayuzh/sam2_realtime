@@ -1,0 +1,12 @@
+NUM_OBJECTS = 1
+YOLO_CHECKPOINT_FILEPATH = "yolov8x-seg.pt"
+SAM_CHECKPOINT_FILEPATH = "../checkpoints/sam2.1_hiera_base_plus.pt"
+SAM_CONFIG_FILEPATH = "./configs/samurai/sam2.1_hiera_b+.yaml"
+DEVICE = 'cuda:0'
+#VIDEO_PATH = "http://stage-ams-nfs.srv.axds.co/stream/adaptive/ucsc/walton_lighthouse/hls.m3u8"
+VIDEO_PATH = "./videos/twinlakes/8/walton_lighthouse-2024-11-16-164421Z.mp4"
+#VIDEO_PATH = "./videos/seabright/8/walton_lighthouse-2024-11-16-164824Z.mp4"
+DESIRED_FPS = 30
+FRAME_INTERVAL = 1.0 / DESIRED_FPS
+RESTART_INTERVAL = 100
+RETRY_FRAMES = 80

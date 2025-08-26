@@ -15,3 +15,5 @@ checkpoints/*.pt
 /notebooks/videos/
 /notebooks/shoreline_jsons/
 model_predict/
+/save_predict/shoreline_jsons/
+save_predict/videos/
