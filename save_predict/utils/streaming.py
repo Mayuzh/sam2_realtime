@@ -76,3 +76,23 @@ def iter_video_frames(video_path: str = None):
 def read_all_frames(video_path: str = None):
     """Return list of frames (memory heavy for large videos)."""
     return [f for _, f, _ in iter_video_frames(video_path)]
+
+def get_video_fps(video_path: str = None) -> float:
+    """Return the FPS reported by the video container, or None if unavailable."""
+    if video_path is None:
+        video_path = VIDEO_PATH
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        try:
+            cap.release()
+        except Exception:
+            pass
+        return None
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    try:
+        cap.release()
+    except Exception:
+        pass
+    if fps and fps > 0:
+        return float(fps)
+    return None

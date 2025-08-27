@@ -34,7 +34,7 @@ def main():
     )
 
     fine_tuned_weights_path = "./finetuned_weights/tuned_shoreline_decoder.pth"
-    sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
+    # sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
     print("Loaded fine-tuned mask decoder weights.")
 
     # =====================
@@ -47,15 +47,15 @@ def main():
     object_lost = False
     frames_since_loss = 0
 
-    prompt_img_site_a = cv2.imread("./masks/walton_lighthouse-2024-11-16-194259Z.jpg")
+    prompt_img_site_a = cv2.imread("./masks/jennette_north-2024-08-27-220509Z.jpg")
     prompt_img_site_a = cv2.cvtColor(prompt_img_site_a, cv2.COLOR_BGR2RGB)
-    mask_json_site_a = "./masks/walton_lighthouse-2024-11-16-194259Z.json"
+    mask_json_site_a = "./masks/jennette_north-2024-08-27-220509Z.json"
     mask_site_a = json_to_mask(mask_json_site_a, prompt_img_site_a.shape)
     mask_site_a = np.expand_dims(np.expand_dims(mask_site_a.astype(np.float32), axis=0), axis=0)
 
-    prompt_img_site_b = cv2.imread("./masks/walton_lighthouse-2024-11-16-195057Z.jpg")
+    prompt_img_site_b = cv2.imread("./masks/jennette_north-2024-08-27-220509Z.jpg")
     prompt_img_site_b = cv2.cvtColor(prompt_img_site_b, cv2.COLOR_BGR2RGB)
-    mask_json_site_b = "./masks/walton_lighthouse-2024-11-16-195057Z.json"
+    mask_json_site_b = "./masks/jennette_north-2024-08-27-220509Z.json"
     mask_site_b = json_to_mask(mask_json_site_b, prompt_img_site_b.shape)
     mask_site_b = np.expand_dims(np.expand_dims(mask_site_b.astype(np.float32), axis=0), axis=0)
 
@@ -72,6 +72,16 @@ def main():
     ignore_mask = None  # will load lazily to match actual frame size
 
     with torch.inference_mode(), torch.autocast(DEVICE, dtype=torch.bfloat16):
+        # Determine save stride based on desired FPS vs source FPS
+        src_fps = streaming.get_video_fps()
+        if DESIRED_FPS is None or (src_fps is not None and DESIRED_FPS >= src_fps):
+            save_stride = 1
+        elif src_fps is None:
+            # Unknown FPS; approximate by time using FRAME_INTERVAL
+            save_stride = None  # use time-based gating
+            last_saved_ts = None
+        else:
+            save_stride = max(1, int(round(src_fps / float(DESIRED_FPS))))
         # =====================
         # New: iterate video frames sequentially (no skipping)
         # =====================
@@ -82,7 +92,6 @@ def main():
             # Lazy load ignore mask with frame dimensions (H,W only)
             if ignore_mask is None and args.ignore_json and os.path.isfile(args.ignore_json):
                 try:
-                    # ORIGINAL: ignore_mask_arr = json_to_mask(args.ignore_json, frame.shape)
                     ignore_mask_arr = json_to_mask(args.ignore_json, frame.shape[:2])  # FIX: pass only (H,W)
                     ignore_mask = (ignore_mask_arr > 0).astype(np.uint8)
                     print(f"Loaded ignore region mask from {args.ignore_json}")
@@ -90,13 +99,6 @@ def main():
                     print(f"Failed to load ignore mask {args.ignore_json}: {e}")
                     ignore_mask = None
 
-            # Prepare frame for model (apply blackout BEFORE color conversion)
-            # ORIGINAL BLOCK:
-            # if ignore_mask is not None and args.ignore_blackout:
-            #     frame_for_model = frame.copy()
-            #     frame_for_model[ignore_mask == 1] = 0  # black out region
-            # else:
-            #     frame_for_model = frame
             if ignore_mask is not None and args.ignore_blackout:
                 frame_for_model = frame.copy()
                 frame_for_model[ignore_mask == 1] = 0  # black out region (FIX applied before cvtColor)
@@ -132,7 +134,7 @@ def main():
                             device=DEVICE,
                             verbose=False
                         )
-                        sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
+                        #sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
                         sam_out = sam.track_new_object(img=current_img, mask=current_mask)
                         #sam_out = sam.track_new_object(img=current_img, points=point_coords)  # Pass only point_coords
 
@@ -157,7 +159,7 @@ def main():
                             device=DEVICE,
                             verbose=False
                         )
-                        sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
+                        #sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
                         print("Re-loaded fine-tuned weights after reinitialization.")
                         current_img = prompt_img_site_b
                         current_mask = mask_site_b
@@ -202,15 +204,34 @@ def main():
             #     sam_out["pred_masks"]
             # )
 
+            # Decide whether to save this frame based on DESIRED_FPS
+            if 'save_stride' in locals() and save_stride is not None:
+                should_save = (frame_idx % save_stride == 0)
+            else:
+                # time-based gating when FPS unknown
+                if 'last_saved_ts' not in locals():
+                    last_saved_ts = None
+                if last_saved_ts is None or (frame_time - last_saved_ts) >= FRAME_INTERVAL:
+                    should_save = True
+                    last_saved_ts = frame_time
+                else:
+                    should_save = False
+
+            # Render overlay and (optionally) save image/JSON when should_save
             frame_with_mask = visualizer.overlay_mask(
                 frame,
                 sam_out["pred_masks"],
                 rock_mask=None,
-                save_shoreline_coords=False,
-                save_path="./shoreline_jsons/twinlakes/8",
+                save_shoreline_coords=should_save,
+                save_path="./shoreline_jsons/jennette_north/calm/11/" if should_save else None,
                 max_save_frames=None,
-                frame_index=frame_counter
+                frame_index=frame_counter,
+                video_filename=VIDEO_PATH,
+                save_even_if_empty=True,
             )
+
+            if should_save:
+                print(f"Saved frame {frame_counter} (every {save_stride if ('save_stride' in locals() and save_stride) else 'time-gated'} frame)")
 
             frame_with_mask = cv2.resize(frame_with_mask, (1280, 960))
             cv2.namedWindow('Santa Cruz', cv2.WINDOW_NORMAL)
