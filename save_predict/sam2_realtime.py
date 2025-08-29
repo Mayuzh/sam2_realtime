@@ -34,7 +34,7 @@ def main():
     )
 
     fine_tuned_weights_path = "./finetuned_weights/tuned_shoreline_decoder.pth"
-    # sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
+    #sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
     print("Loaded fine-tuned mask decoder weights.")
 
     # =====================
@@ -47,15 +47,15 @@ def main():
     object_lost = False
     frames_since_loss = 0
 
-    prompt_img_site_a = cv2.imread("./masks/jennette_north-2024-08-27-220509Z.jpg")
+    prompt_img_site_a = cv2.imread("./masks/jennette_north-2025-08-26-225322Z.jpg")
     prompt_img_site_a = cv2.cvtColor(prompt_img_site_a, cv2.COLOR_BGR2RGB)
-    mask_json_site_a = "./masks/jennette_north-2024-08-27-220509Z.json"
+    mask_json_site_a = "./masks/jennette_north-2025-08-26-225322Z.json"
     mask_site_a = json_to_mask(mask_json_site_a, prompt_img_site_a.shape)
     mask_site_a = np.expand_dims(np.expand_dims(mask_site_a.astype(np.float32), axis=0), axis=0)
 
-    prompt_img_site_b = cv2.imread("./masks/jennette_north-2024-08-27-220509Z.jpg")
+    prompt_img_site_b = cv2.imread("./masks/jennette_north-2025-08-26-225322Z.jpg")
     prompt_img_site_b = cv2.cvtColor(prompt_img_site_b, cv2.COLOR_BGR2RGB)
-    mask_json_site_b = "./masks/jennette_north-2024-08-27-220509Z.json"
+    mask_json_site_b = "./masks/jennette_north-2025-08-26-225322Z.json"
     mask_site_b = json_to_mask(mask_json_site_b, prompt_img_site_b.shape)
     mask_site_b = np.expand_dims(np.expand_dims(mask_site_b.astype(np.float32), axis=0), axis=0)
 
@@ -69,46 +69,42 @@ def main():
     #visualizer = Visualizer(1440, 1080)
     visualizer = Visualizer(1280, 960)
 
-    ignore_mask = None  # will load lazily to match actual frame size
-
     with torch.inference_mode(), torch.autocast(DEVICE, dtype=torch.bfloat16):
-        # Determine save stride based on desired FPS vs source FPS
+        # Determine processing stride from desired vs actual FPS
         src_fps = streaming.get_video_fps()
         if DESIRED_FPS is None or (src_fps is not None and DESIRED_FPS >= src_fps):
-            save_stride = 1
+            process_stride = 1
         elif src_fps is None:
-            # Unknown FPS; approximate by time using FRAME_INTERVAL
-            save_stride = None  # use time-based gating
-            last_saved_ts = None
+            process_stride = 1  # unknown FPS, process all frames
         else:
-            save_stride = max(1, int(round(src_fps / float(DESIRED_FPS))))
-        # =====================
-        # New: iterate video frames sequentially (no skipping)
-        # =====================
-        for frame_idx, frame, frame_time in streaming.iter_video_frames():
+            process_stride = max(1, int(round(src_fps / float(DESIRED_FPS))))
+
+    # Inference resize target (kept consistent with Visualizer size)
+    INFER_W, INFER_H = 1280, 960
+    # Count frames actually processed (after skipping) for periodic reinit
+    processed_frame_count = 0
+    # =====================
+    # New: iterate video frames sequentially (no skipping)
+    # =====================
+    for frame_idx, frame, frame_time in streaming.iter_video_frames():
+            # Skip frames to match desired processing rate if needed
+            if process_stride > 1 and (frame_idx % process_stride) != 0:
+                continue
+            processed_frame_count += 1
             frame_counter = frame_idx + 1
-            last_processed_time = frame_time
+            #last_processed_time = frame_time
 
-            # Lazy load ignore mask with frame dimensions (H,W only)
-            if ignore_mask is None and args.ignore_json and os.path.isfile(args.ignore_json):
-                try:
-                    ignore_mask_arr = json_to_mask(args.ignore_json, frame.shape[:2])  # FIX: pass only (H,W)
-                    ignore_mask = (ignore_mask_arr > 0).astype(np.uint8)
-                    print(f"Loaded ignore region mask from {args.ignore_json}")
-                except Exception as e:
-                    print(f"Failed to load ignore mask {args.ignore_json}: {e}")
-                    ignore_mask = None
+            frame_for_model = frame
 
-            if ignore_mask is not None and args.ignore_blackout:
-                frame_for_model = frame.copy()
-                frame_for_model[ignore_mask == 1] = 0  # black out region (FIX applied before cvtColor)
-            else:
-                frame_for_model = frame
+            # Resize for inference to reduce compute
+            if (frame_for_model.shape[1], frame_for_model.shape[0]) != (INFER_W, INFER_H):
+                frame_for_model = cv2.resize(frame_for_model, (INFER_W, INFER_H))
 
             # ORIGINAL: img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            img = cv2.cvtColor(frame_for_model, cv2.COLOR_BGR2RGB)  # FIX: use possibly blacked-out frame
+            img = cv2.cvtColor(frame_for_model, cv2.COLOR_BGR2RGB)  # use possibly blacked-out, resized frame
 
-            img_for_detection = cv2.GaussianBlur(img, (3, 3), 0) 
+            #img_for_detection = cv2.GaussianBlur(img, (3, 3), 0) 
+            img_for_detection = img
             #img_for_detection = cv2.GaussianBlur(img, (151, 151), 0)
 
             H, W = img.shape[:2]
@@ -124,7 +120,8 @@ def main():
                 first_frame = False
             else:
                 if not object_lost:
-                    if frame_counter % RESTART_INTERVAL == 0:
+                    # Reinitialize every RESTART_INTERVAL processed frames (not raw video frames)
+                    if (isinstance(RESTART_INTERVAL, int) and RESTART_INTERVAL > 0 and (processed_frame_count % RESTART_INTERVAL == 0)):
                         print(f"Frame {frame_counter}: Periodic reinitialization with mask prompt.")
                         torch.cuda.empty_cache()
                         sam = build_sam2_object_tracker(
@@ -171,32 +168,16 @@ def main():
                             "pred_masks": torch.zeros((1, 1, img.shape[0], img.shape[1]), dtype=torch.bfloat16, device=DEVICE)
                         }
 
-            # Optional: enforce ignore region on predicted mask even if not blacked out (hard suppression)
-            # ORIGINAL:
-            # if ignore_mask is not None:
-            #     ignore_t = torch.from_numpy(1 - ignore_mask).to(sam_out["pred_masks"].dtype).to(DEVICE).unsqueeze(0).unsqueeze(0)  # FIX dtype & shape
-            #     sam_out["pred_masks"] = sam_out["pred_masks"] * ignore_t
-            if ignore_mask is not None:
-                pred_h, pred_w = sam_out["pred_masks"].shape[-2:]
-                # Resize ignore_mask (frame size) to prediction size if needed
-                if ignore_mask.shape != (pred_h, pred_w):
-                    # Use nearest-neighbor to preserve binary nature
-                    ignore_resized = cv2.resize(ignore_mask, (pred_w, pred_h), interpolation=cv2.INTER_NEAREST)
-                else:
-                    ignore_resized = ignore_mask
-                ignore_t = torch.from_numpy(1 - ignore_resized).to(sam_out["pred_masks"].dtype).to(DEVICE).unsqueeze(0).unsqueeze(0)
-                sam_out["pred_masks"] = sam_out["pred_masks"] * ignore_t
-
-            rock_mask_tensor = torch.from_numpy(rock_mask).float().to(DEVICE)
-            pred_mask_shape = sam_out["pred_masks"].shape[-2:]
-            rock_mask_resized = F.interpolate(
-                rock_mask_tensor,
-                size=pred_mask_shape,
-                mode='bilinear',
-                align_corners=False
-            )
-            if rock_mask_resized.shape[0] != sam_out["pred_masks"].shape[0]:
-                rock_mask_resized = rock_mask_resized.expand_as(sam_out["pred_masks"])
+            # rock_mask_tensor = torch.from_numpy(rock_mask).float().to(DEVICE)
+            # pred_mask_shape = sam_out["pred_masks"].shape[-2:]
+            # rock_mask_resized = F.interpolate(
+            #     rock_mask_tensor,
+            #     size=pred_mask_shape,
+            #     mode='bilinear',
+            #     align_corners=False
+            # )
+            # if rock_mask_resized.shape[0] != sam_out["pred_masks"].shape[0]:
+            #     rock_mask_resized = rock_mask_resized.expand_as(sam_out["pred_masks"])
 
             # sam_out["pred_masks"] = torch.where(
             #     rock_mask_resized > 0.5,
@@ -204,34 +185,15 @@ def main():
             #     sam_out["pred_masks"]
             # )
 
-            # Decide whether to save this frame based on DESIRED_FPS
-            if 'save_stride' in locals() and save_stride is not None:
-                should_save = (frame_idx % save_stride == 0)
-            else:
-                # time-based gating when FPS unknown
-                if 'last_saved_ts' not in locals():
-                    last_saved_ts = None
-                if last_saved_ts is None or (frame_time - last_saved_ts) >= FRAME_INTERVAL:
-                    should_save = True
-                    last_saved_ts = frame_time
-                else:
-                    should_save = False
-
-            # Render overlay and (optionally) save image/JSON when should_save
             frame_with_mask = visualizer.overlay_mask(
                 frame,
                 sam_out["pred_masks"],
                 rock_mask=None,
-                save_shoreline_coords=should_save,
-                save_path="./shoreline_jsons/jennette_north/calm/11/" if should_save else None,
+                save_shoreline_coords=True,
+                save_path="./shoreline_jsons/jennette_north/active/13",
                 max_save_frames=None,
-                frame_index=frame_counter,
-                video_filename=VIDEO_PATH,
-                save_even_if_empty=True,
+                frame_index=frame_counter
             )
-
-            if should_save:
-                print(f"Saved frame {frame_counter} (every {save_stride if ('save_stride' in locals() and save_stride) else 'time-gated'} frame)")
 
             frame_with_mask = cv2.resize(frame_with_mask, (1280, 960))
             cv2.namedWindow('Santa Cruz', cv2.WINDOW_NORMAL)
