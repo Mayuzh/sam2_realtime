@@ -189,7 +189,7 @@ def main():
                 frame,
                 sam_out["pred_masks"],
                 rock_mask=None,
-                save_shoreline_coords=True,
+                save_shoreline_coords=False,
                 save_path="./shoreline_jsons/jennette_north/active/13",
                 max_save_frames=None,
                 frame_index=frame_counter

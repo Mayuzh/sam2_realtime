@@ -1,4 +1,6 @@
 import cv2
+import os
+import re
 import threading  # kept for legacy commented code
 import time
 from datetime import datetime
@@ -47,6 +49,10 @@ from utils.config import VIDEO_PATH
 # New: Sequential frame generator for file-based videos (no skipping)
 # =====================
 
+def _natural_key(s: str):
+    return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', s)]
+
+
 def iter_video_frames(video_path: str = None):
     """Yield (frame_index, frame, timestamp_seconds) for every frame in the file.
 
@@ -56,6 +62,23 @@ def iter_video_frames(video_path: str = None):
     if video_path is None:
         video_path = VIDEO_PATH
 
+    # If a directory is provided, read images as frames in natural-sorted order
+    if os.path.isdir(video_path):
+        exts = {'.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff', '.webp'}
+        names = [n for n in os.listdir(video_path) if os.path.splitext(n)[1].lower() in exts]
+        names.sort(key=_natural_key)
+        if not names:
+            raise RuntimeError(f"No image frames found in directory: {video_path}")
+        for idx, name in enumerate(names):
+            fp = os.path.join(video_path, name)
+            frame = cv2.imread(fp)
+            if frame is None:
+                continue
+            ts = time.time()
+            yield idx, frame, ts
+        return
+
+    # Otherwise, assume a video file
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise RuntimeError(f"Could not open video file: {video_path}")
@@ -81,6 +104,9 @@ def get_video_fps(video_path: str = None) -> float:
     """Return the FPS reported by the video container, or None if unavailable."""
     if video_path is None:
         video_path = VIDEO_PATH
+    # For a directory of frames, FPS is unknown
+    if os.path.isdir(video_path):
+        return None
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         try:
