@@ -3,6 +3,7 @@
 
 import argparse
 import os
+from pathlib import Path
 import pandas as pd
 import numpy as np
 import math
@@ -115,11 +116,19 @@ def eval_tps(model, query_pts):
     Pq = np.concatenate([ones, q], axis=1)  # (m,3)
     return (Pq @ a) + (Kq @ w)
 
+def _gather_points_files(points_path: Path):
+    if points_path.is_file() and points_path.suffix.lower() == ".csv":
+        return [points_path]
+    if points_path.is_dir():
+        return sorted([p for p in points_path.glob("*.csv")])
+    raise FileNotFoundError(f"Could not find CSV(s) at {points_path}")
+
+
 def main():
     ap = argparse.ArgumentParser(description="Warp CSV points via Thin-Plate Spline (explicit TPS) using ArcGIS-style control points.")
-    ap.add_argument("--points", default="./csv/walton_lighthouse-2024-11-16-210138Z_000007.csv", help="Input points CSV (must contain columns x,y).")
+    ap.add_argument("--points", default="./csv/seabright/13/", help="Input points CSV or a folder of CSVs (each must contain columns x,y).")
     ap.add_argument("--links", default="./links/control_points.txt", help="Control points file: ArcGIS link table (.txt) or generic CSV.")
-    ap.add_argument("--out", default="./csv/walton_lighthouse-2024-11-16-210138Z_000007_warped.csv", help="Output warped CSV.")
+    ap.add_argument("--out", default="./csv/seabright_rec/13/", help="Output warped CSV file, or an output folder when --points is a folder.")
     ap.add_argument("--smooth", type=float, default=0.0, help="Smoothing (lambda). Increase slightly (e.g. 1e-3) if system is near-singular.")
     ap.add_argument("--y-down", action="store_true", help="Indicates source/control pixel coords are in a Y-down system (origin top-left). They will NOT be flipped; this flag only controls how --image-height flipping is interpreted.")
     ap.add_argument("--image-height", type=int, default=None, help="If provided WITH --flip-to-yup, used to convert y_down to y_up via (H-1 - y).")
@@ -149,32 +158,64 @@ def main():
         rms_y = math.sqrt(np.mean((pred_y - dst_y)**2))
         print(f"Control residual RMS: X={rms_x:.4f}  Y={rms_y:.4f}")
 
-    # Load points to warp
-    pts = pd.read_csv(args.points)
-    lower = {c.lower(): c for c in pts.columns}
-    if "x" not in lower or "y" not in lower:
-        raise ValueError("Points CSV must contain columns 'x' and 'y' (case-insensitive).")
-    xcol, ycol = lower["x"], lower["y"]
+    # Determine batch or single mode
+    points_path = Path(args.points)
+    out_path = Path(args.out)
+    points_files = _gather_points_files(points_path)
 
-    px = pts[xcol].to_numpy(float)
-    py = pts[ycol].to_numpy(float)
+    # If multiple inputs, treat output as directory
+    batch_mode = len(points_files) > 1 or points_path.is_dir() or (out_path.exists() and out_path.is_dir()) or (out_path.suffix.lower() != ".csv")
 
-    if args.flip_to_yup:
-        if args.image_height is None:
-            raise SystemExit("--flip-to-yup requires --image-height (same as used for control points).")
-        H = args.image_height
-        py = (H - 1) - py
-
-    # Evaluate
-    query = np.stack([px, py], axis=1)
-    Xw = eval_tps(model_x, query)
-    Yw = eval_tps(model_y, query)
-
-    pts["X_warped"] = Xw
-    pts["Y_warped"] = Yw
-    os.makedirs(os.path.dirname(os.path.abspath(args.out)) or ".", exist_ok=True)
-    pts.to_csv(args.out, index=False)
-    print(f"✅ Wrote warped CSV: {args.out} (columns added: X_warped, Y_warped)")
+    if batch_mode:
+        out_dir = out_path if out_path.suffix == "" or out_path.is_dir() else out_path
+        out_dir.mkdir(parents=True, exist_ok=True)
+        total = 0
+        for csv_in in points_files:
+            pts = pd.read_csv(csv_in)
+            lower = {c.lower(): c for c in pts.columns}
+            if "x" not in lower or "y" not in lower:
+                print(f"Skipping {csv_in}: missing x/y columns")
+                continue
+            xcol, ycol = lower["x"], lower["y"]
+            px = pts[xcol].to_numpy(float)
+            py = pts[ycol].to_numpy(float)
+            if args.flip_to_yup:
+                if args.image_height is None:
+                    raise SystemExit("--flip-to-yup requires --image-height (same as used for control points).")
+                H = args.image_height
+                py = (H - 1) - py
+            query = np.stack([px, py], axis=1)
+            Xw = eval_tps(model_x, query)
+            Yw = eval_tps(model_y, query)
+            pts["X_warped"] = Xw
+            pts["Y_warped"] = Yw
+            out_csv = out_dir / f"{csv_in.stem}_warped.csv"
+            pts.to_csv(out_csv, index=False)
+            total += len(pts)
+        print(f"✅ Wrote {len(points_files)} file(s) to {str(out_dir)} (total rows: {total})")
+    else:
+        # Single file mode
+        csv_in = points_files[0]
+        pts = pd.read_csv(csv_in)
+        lower = {c.lower(): c for c in pts.columns}
+        if "x" not in lower or "y" not in lower:
+            raise ValueError("Points CSV must contain columns 'x' and 'y' (case-insensitive).")
+        xcol, ycol = lower["x"], lower["y"]
+        px = pts[xcol].to_numpy(float)
+        py = pts[ycol].to_numpy(float)
+        if args.flip_to_yup:
+            if args.image_height is None:
+                raise SystemExit("--flip-to-yup requires --image-height (same as used for control points).")
+            H = args.image_height
+            py = (H - 1) - py
+        query = np.stack([px, py], axis=1)
+        Xw = eval_tps(model_x, query)
+        Yw = eval_tps(model_y, query)
+        pts["X_warped"] = Xw
+        pts["Y_warped"] = Yw
+        os.makedirs(os.path.dirname(os.path.abspath(args.out)) or ".", exist_ok=True)
+        pts.to_csv(args.out, index=False)
+        print(f"✅ Wrote warped CSV: {args.out} (columns added: X_warped, Y_warped)")
 
 if __name__ == "__main__":
     main()

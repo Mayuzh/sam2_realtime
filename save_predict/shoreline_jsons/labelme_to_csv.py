@@ -2,6 +2,7 @@
 import argparse
 import csv
 import json
+import os
 from pathlib import Path
 from typing import Dict, Any, Iterable, List
 
@@ -70,20 +71,35 @@ def write_csv(rows: Iterable[Dict[str, Any]], out_path: Path, keep_metadata: boo
 
 def main():
     ap = argparse.ArgumentParser(description="Convert LabelMe polygon JSON annotations to CSV for ArcGIS XY import.")
-    ap.add_argument("--input", default="./seabright/13/walton_lighthouse-2024-11-16-210138Z_000007.json", help="Path to a LabelMe JSON file or a folder of JSONs (default: ./input_jsons).")
-    ap.add_argument("--output", default="./csv/walton_lighthouse-2024-11-16-210138Z_000007.csv", help="Path to the output CSV file (default: ./output/annotations.csv).")
+    ap.add_argument("--input", default="./seabright/13/", help="Path to a LabelMe JSON file or a folder of JSONs.")
+    ap.add_argument("--output", default="./csv/seabright/13", help="Path to the output CSV file OR an output folder when --per-file is used.")
+    ap.add_argument("--per-file", action="store_true", help="If set (or when --output is a directory), write one CSV per input JSON into the output folder.")
     ap.add_argument("--keep-metadata", action="store_true", help="Keep source_file/image_path/width/height columns. Default = False.")
     args = ap.parse_args()
 
     input_path = Path(args.input)
     json_files = gather_json_files(input_path)
-    all_rows = []
-    for jp in json_files:
-        for row in rows_from_labelme_json(jp, keep_metadata=args.keep_metadata):
-            all_rows.append(row)
 
-    write_csv(all_rows, Path(args.output), keep_metadata=args.keep_metadata)
-    print(f"Wrote {len(all_rows)} rows from {len(json_files)} JSON file(s) to {args.output}")
+    out_path = Path(args.output)
+    treat_output_as_dir = args.per_file or (out_path.exists() and out_path.is_dir()) or (out_path.suffix.lower() != ".csv")
+
+    if treat_output_as_dir:
+        out_dir = out_path if out_path.suffix == "" else out_path  # allow non-.csv paths
+        out_dir.mkdir(parents=True, exist_ok=True)
+        total_rows = 0
+        for jp in json_files:
+            rows = list(rows_from_labelme_json(jp, keep_metadata=args.keep_metadata))
+            total_rows += len(rows)
+            out_csv = out_dir / (jp.stem + ".csv")
+            write_csv(rows, out_csv, keep_metadata=args.keep_metadata)
+        print(f"Wrote {total_rows} rows across {len(json_files)} JSON file(s) into folder: {str(out_dir)}")
+    else:
+        all_rows = []
+        for jp in json_files:
+            for row in rows_from_labelme_json(jp, keep_metadata=args.keep_metadata):
+                all_rows.append(row)
+        write_csv(all_rows, out_path, keep_metadata=args.keep_metadata)
+        print(f"Wrote {len(all_rows)} rows from {len(json_files)} JSON file(s) to {str(out_path)}")
 
 if __name__ == "__main__":
     main()

@@ -21,4 +21,6 @@ model_predict/
 /save_predict/shoreline_jsons/mask/
 /save_predict/shoreline_jsons/filter.py
 /save_predict/shoreline_jsons/clean_shoreline_points.py
-save_predict/videos/
+/save_predict/videos/
+/save_predict/shoreline_jsons/csv/seabright/
+/save_predict/shoreline_jsons/csv/seabright_rec/
