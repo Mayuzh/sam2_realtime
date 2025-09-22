@@ -49,7 +49,7 @@ def main():
     mask_site_b = json_to_mask(mask_json_site_b, prompt_img_site_b.shape)
     mask_site_b = np.expand_dims(np.expand_dims(mask_site_b.astype(np.float32), axis=0), axis=0)
 
-    rock_mask_json = "./region/walton_lighthouse-2024-11-16-194259Z.json"
+    rock_mask_json = "./region/walton_lighthouse-2025-05-13-231928Z.json"
     rock_mask = json_to_mask(rock_mask_json, prompt_img_site_a.shape)
     rock_mask = np.expand_dims(np.expand_dims(rock_mask.astype(np.float32), axis=0), axis=0)
 
@@ -167,7 +167,7 @@ def main():
                 frame,
                 sam_out["pred_masks"],
                 rock_mask=None,
-                save_shoreline_coords=True,
+                save_shoreline_coords=False,
                 save_path="./shoreline_jsons/twinlakes/13",
                 max_save_frames=None,
                 frame_index=None

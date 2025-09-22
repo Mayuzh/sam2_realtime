@@ -1,8 +1,9 @@
 import cv2
 import threading
 import time
+import os
 from datetime import datetime
-from utils.config import VIDEO_PATH
+from utils.config import VIDEO_PATH, RETRY_FRAMES
 
 latest_frame = None
 latest_frame_time = None
@@ -12,31 +13,47 @@ retry_counter = 0
 max_retries = 5
 
 def frame_capture():
+    """Capture frames.
+
+    Behavior changes:
+      - If VIDEO_PATH is a local file (existing path on disk), loop back to start when end-of-file is reached.
+      - If VIDEO_PATH looks like a network/stream (http/rtsp or non-existent file), on failure we wait and retry.
+    """
     global latest_frame, latest_frame_time, capture_running, retry_counter
-    stream_url = VIDEO_PATH
-    cap = cv2.VideoCapture(stream_url)
+    source = VIDEO_PATH
+    is_file = os.path.isfile(source)
+    cap = cv2.VideoCapture(source)
+    eof_failures = 0
     while capture_running:
-        now = datetime.now()
-        # if now.hour < 7 or now.hour >= 19:
-        #     time.sleep(300)
-        #     continue
         ret, frame = cap.read()
         if ret:
             with lock:
                 latest_frame = frame
                 latest_frame_time = time.time()
             retry_counter = 0
+            eof_failures = 0
         else:
+            # End of file behavior
+            if is_file:
+                eof_failures += 1
+                # Try to loop: seek to frame 0
+                pos_set = cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                if not pos_set:
+                    cap.release()
+                    cap = cv2.VideoCapture(source)
+                time.sleep(0.01)
+                continue
+            # Streaming source behavior
             latest_frame = None
-            break
             retry_counter += 1
-            print(f"[Capture Thread] Frame read failed ({retry_counter}/{max_retries})")
-            time.sleep(1)
+            print(f"[Capture Thread] Stream frame read failed ({retry_counter}/{max_retries})")
+            time.sleep(1.0)
             if retry_counter >= max_retries:
-                print("[Capture Thread] Reinitializing stream...")
+                print("[Capture Thread] Reinitializing stream source...")
                 cap.release()
-                cap = cv2.VideoCapture(stream_url)
+                cap = cv2.VideoCapture(source)
                 retry_counter = 0
-        time.sleep(0.01)
+            continue
+        time.sleep(0.005)
 
     cap.release()
