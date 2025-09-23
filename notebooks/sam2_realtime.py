@@ -73,8 +73,8 @@ def main():
 
             if frame is None:
                 print("No frame available, skipping...")
-                #continue
-                break
+                continue
+                #break
 
             # if frame_time - last_processed_time < FRAME_INTERVAL:
             #     continue
