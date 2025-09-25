@@ -45,8 +45,7 @@ def write_labelme_json(image_path, coords, image_shape, label="shoreline", margi
         "text":        ""
     }
     image_save_path = image_path
-    #saved_image = cv2.resize(streaming.latest_frame, (1280, 960))
-    saved_image = cv2.resize(streaming.latest_frame, (1440, 1080))
+    saved_image = cv2.resize(streaming.latest_frame, (1280, 960))
     cv2.imwrite(image_save_path, saved_image)
     json_path = os.path.splitext(image_save_path)[0] + ".json"
     with open(json_path, "w") as f:

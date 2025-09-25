@@ -62,10 +62,10 @@ def main():
     with torch.inference_mode(), torch.autocast(DEVICE, dtype=torch.bfloat16):
         while True:
             now = datetime.now()
-            # if now.hour < 7 or now.hour >= 19:
-            #     print("STREAM OFF: Outside operational hours (7 AM to 7 PM).")
-            #     time.sleep(300)
-            #     continue
+            if now.hour < 7 or now.hour >= 19:
+                print("STREAM OFF: Outside operational hours (7 AM to 7 PM).")
+                time.sleep(300)
+                continue
 
             with streaming.lock:
                 frame = streaming.latest_frame.copy() if streaming.latest_frame is not None else None
@@ -74,10 +74,9 @@ def main():
             if frame is None:
                 print("No frame available, skipping...")
                 continue
-                #break
 
-            # if frame_time - last_processed_time < FRAME_INTERVAL:
-            #     continue
+            if frame_time - last_processed_time < FRAME_INTERVAL:
+                continue
             last_processed_time = frame_time
             frame_counter += 1
 
@@ -173,11 +172,9 @@ def main():
                 frame_index=None
             )
 
-            #frame_with_mask = cv2.resize(frame_with_mask, (1280, 960))
-            frame_with_mask = cv2.resize(frame_with_mask, (1440, 1080))
+            frame_with_mask = cv2.resize(frame_with_mask, (1280, 960))
             cv2.namedWindow('Santa Cruz', cv2.WINDOW_NORMAL)
-            cv2.resizeWindow('Santa Cruz', 1440, 1080)
-            #cv2.resizeWindow('Santa Cruz', 1280, 960)
+            cv2.resizeWindow('Santa Cruz', 1280, 960)
             cv2.imshow("Santa Cruz", frame_with_mask)
 
             # Calculate and print the frame rate

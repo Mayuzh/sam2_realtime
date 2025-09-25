@@ -92,10 +92,10 @@ def main():
     with torch.inference_mode(), torch.autocast(DEVICE, dtype=torch.bfloat16):
         while True:
             now = datetime.now()
-            # if now.hour < 7 or now.hour >= 19:
-            #     print("STREAM OFF: Outside operational hours (7 AM to 7 PM).")
-            #     time.sleep(300)
-            #     continue
+            if now.hour < 7 or now.hour >= 19:
+                print("STREAM OFF: Outside operational hours (7 AM to 7 PM).")
+                time.sleep(300)
+                continue
 
             with streaming.lock:
                 frame = streaming.latest_frame.copy() if streaming.latest_frame is not None else None
