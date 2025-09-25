@@ -1,0 +1,12 @@
+{
+  "mean_iqr_pixels": 81.572,
+  "median_iqr_pixels": 70.312,
+  "mean_std_pixels": 166.209,
+  "median_std_pixels": 163.882,
+  "coverage_points": 500,
+  "total_points": 500,
+  "clip_dir": "./jennette_north/active/11/",
+  "n_curves": 125,
+  "x_min": 385.2,
+  "x_max": 637.0
+}

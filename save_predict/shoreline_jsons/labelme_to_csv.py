@@ -71,8 +71,8 @@ def write_csv(rows: Iterable[Dict[str, Any]], out_path: Path, keep_metadata: boo
 
 def main():
     ap = argparse.ArgumentParser(description="Convert LabelMe polygon JSON annotations to CSV for ArcGIS XY import.")
-    ap.add_argument("--input", default="./twinlakes/8/", help="Path to a LabelMe JSON file or a folder of JSONs.")
-    ap.add_argument("--output", default="./csv/twinlakes/8/", help="Path to the output CSV file OR an output folder when --per-file is used.")
+    ap.add_argument("--input", default="./jennette_north/calm/17/", help="Path to a LabelMe JSON file or a folder of JSONs.")
+    ap.add_argument("--output", default="./csv/jennette_north/calm/17/", help="Path to the output CSV file OR an output folder when --per-file is used.")
     ap.add_argument("--per-file", action="store_true", help="If set (or when --output is a directory), write one CSV per input JSON into the output folder.")
     ap.add_argument("--keep-metadata", action="store_true", help="Keep source_file/image_path/width/height columns. Default = False.")
     args = ap.parse_args()

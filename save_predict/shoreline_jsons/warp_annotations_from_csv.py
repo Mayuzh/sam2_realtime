@@ -166,10 +166,10 @@ def _gather_points_files(points_path: Path):
 
 def main():
     ap = argparse.ArgumentParser(description="Warp CSV points using projective (homography) or TPS transform with ArcGIS-style control points.")
-    ap.add_argument("--points", default="./csv/twinlakes/13/", help="Input points CSV or a folder of CSVs (each must contain columns x,y).")
-    ap.add_argument("--links", default="./links/control_points2.txt", help="Control points file: ArcGIS link table (.txt) or generic CSV.")
-    ap.add_argument("--out", default="./csv/twinlakes_rec/13/", help="Output warped CSV file, or an output folder when --points is a folder.")
-    ap.add_argument("--method", choices=["projective", "tps"], default="tps", help="Transformation method: projective homography or thin-plate spline (default: projective).")
+    ap.add_argument("--points", default="./csv/jennette_north/active/8/", help="Input points CSV or a folder of CSVs (each must contain columns x,y).")
+    ap.add_argument("--links", default="./links/control_points_jennette.txt", help="Control points file: ArcGIS link table (.txt) or generic CSV.")
+    ap.add_argument("--out", default="./csv/jennette_north_rec/active/8/", help="Output warped CSV file, or an output folder when --points is a folder.")
+    ap.add_argument("--method", choices=["projective", "tps"], default="projective", help="Transformation method: projective homography or thin-plate spline (default: projective).")
     ap.add_argument("--smooth", type=float, default=0.0, help="Smoothing (lambda) for TPS. Increase slightly (e.g. 1e-3) if TPS system is near-singular.")
     ap.add_argument("--y-down", action="store_true", help="Indicates source/control pixel coords are in a Y-down system (origin top-left). They will NOT be flipped; this flag only controls how --image-height flipping is interpreted.")
     ap.add_argument("--image-height", type=int, default=None, help="If provided WITH --flip-to-yup, used to convert y_down to y_up via (H-1 - y).")

@@ -1,0 +1,12 @@
+{
+  "mean_iqr_pixels": 39.099,
+  "median_iqr_pixels": 39.839,
+  "mean_std_pixels": 31.049,
+  "median_std_pixels": 36.813,
+  "coverage_points": 500,
+  "total_points": 500,
+  "clip_dir": "./jennette_north/calm/11/",
+  "n_curves": 284,
+  "x_min": 529.0,
+  "x_max": 1272.0
+}
