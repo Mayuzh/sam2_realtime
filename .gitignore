@@ -22,5 +22,11 @@ model_predict/
 /save_predict/shoreline_jsons/filter.py
 /save_predict/shoreline_jsons/clean_shoreline_points.py
 /save_predict/videos/
-/save_predict/shoreline_jsons/csv/
+/save_predict/shoreline_jsons/csv/jennette_north/
+/save_predict/shoreline_jsons/csv/seabright/
+/save_predict/shoreline_jsons/csv/twinlakes/
+/save_predict/shoreline_jsons/csv/seabright_rec/
+/save_predict/shoreline_jsons/csv/twinlakes_rec/
+/save_predict/shoreline_jsons/csv/vis/
+/save_predict/shoreline_jsons/csv/vis_new/
 
