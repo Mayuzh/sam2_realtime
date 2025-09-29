@@ -429,8 +429,8 @@ def main():
     ap.add_argument("--alpha", type=float, default=0.35, help="Alpha transparency for curves")
     ap.add_argument("--cmap", default="tab20", help="Matplotlib colormap name to cycle through for curves")
     # Fixed default axes so all plots share the same view; override if needed
-    ap.add_argument("--xlim", type=float, nargs=2, default=[200.0, 1000.0], help="x-limits: xmin xmax (default 0 1300)")
-    ap.add_argument("--ylim", type=float, nargs=2, default=[ -1000.0, 0.0], help="y-limits: ymin ymax (default 0 -1000; inverted)")
+    ap.add_argument("--xlim", type=float, nargs=2, default=[200.0, 700.0], help="x-limits: xmin xmax (default 0 1300)")
+    ap.add_argument("--ylim", type=float, nargs=2, default=[ -1300.0, 0.0], help="y-limits: ymin ymax (default 0 -1000; inverted)")
     ap.add_argument("--require_vertex_index", action="store_true", help="Skip files lacking vertex_index to avoid spurious connectors.")
     ap.add_argument("--max_jump_dist", type=float, default=25, help="If set, split a curve when adjacent vertices are farther than this (pixels).")
     ap.add_argument("--report_top_jumps", type=int, default=10, help="Print the top N curves by largest adjacent-vertex jump distance.")
