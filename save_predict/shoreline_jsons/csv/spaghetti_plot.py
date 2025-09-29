@@ -311,7 +311,7 @@ def plot_spaghetti(curves: List[Tuple[np.ndarray, np.ndarray, str]], out_png: st
         if outlier_mask is not None and np.any(outlier_mask):
             handles.append(Line2D([0], [0], color='r', lw=1.2, ls='--'))
             labels.append("Outlier")
-    plt.title(title or "Shoreline Spaghetti Plot")
+    plt.title(title or "Curve Boxplot")
     plt.xlabel("x (pixels)")
     plt.ylabel("y (pixels)")
     plt.grid(True, alpha=0.25)
@@ -364,7 +364,7 @@ def process_folder(clip_dir: str, out_prefix: str, label_name: str = "shoreline"
     if not curves:
         print(f"Skipping (no curves): {clip_dir}")
         return False
-    title = f"Spaghetti: {os.path.basename(os.path.normpath(clip_dir))} (n={len(curves)})"
+    title = "Curve Boxplot"
     out_png = f"{out_prefix}_spaghetti.png"
     os.makedirs(os.path.dirname(out_prefix) or ".", exist_ok=True)
     # Log diagnostic extents
@@ -459,7 +459,7 @@ def main():
                 out_prefix = os.path.join(args.out_root, slug)
                 os.makedirs(args.out_root, exist_ok=True)
             else:
-                out_prefix = os.path.join(args.out_root, rel, "spaghetti")
+                out_prefix = os.path.join(args.out_root, rel, "Curve Boxplot")
                 os.makedirs(os.path.dirname(out_prefix), exist_ok=True)
             ok = process_folder(d, out_prefix, label_name=args.label_name,
                                 linewidth=args.linewidth, alpha=args.alpha, cmap_name=args.cmap,
