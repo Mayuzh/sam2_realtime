@@ -213,6 +213,34 @@ def _cap_outliers(Y: np.ndarray, stats: dict, mask: np.ndarray, cap_ratio: float
     return new_mask
 
 
+def _pick_two_extreme_outliers(Y: np.ndarray, stats: dict, base_mask: np.ndarray, min_support_frac: float = 0.6) -> np.ndarray:
+    """Return a mask with at most two outliers: one high and one low based on total outside distance."""
+    n = Y.shape[0]
+    if base_mask is None or not np.any(base_mask):
+        return base_mask
+    wl = stats["whisker_low"]; wh = stats["whisker_high"]
+    xcount = stats.get("xcount")
+    min_support = max(1, int(np.ceil(min_support_frac * n)))
+    support_mask = np.ones(Y.shape[1], dtype=bool)
+    if xcount is not None:
+        support_mask = np.asarray(xcount) >= min_support
+    below = np.maximum(wl - Y, 0.0)
+    above = np.maximum(Y - wh, 0.0)
+    below[:, ~support_mask] = 0.0
+    above[:, ~support_mask] = 0.0
+    low_scores = np.nansum(below, axis=1)
+    high_scores = np.nansum(above, axis=1)
+    idx = np.where(base_mask)[0]
+    low_idx = idx[np.argmax(low_scores[idx])] if idx.size else None
+    high_idx = idx[np.argmax(high_scores[idx])] if idx.size else None
+    new_mask = np.zeros(n, dtype=bool)
+    if low_idx is not None:
+        new_mask[int(low_idx)] = True
+    if high_idx is not None:
+        new_mask[int(high_idx)] = True
+    return new_mask
+
+
 def _split_by_jump(x: np.ndarray, y: np.ndarray, max_jump_dist: float | None) -> List[Tuple[np.ndarray, np.ndarray]]:
     if max_jump_dist is None or max_jump_dist <= 0:
         return [(x, y)]
@@ -276,7 +304,8 @@ def plot_spaghetti(curves: List[Tuple[np.ndarray, np.ndarray, str]], out_png: st
         labels.append("50% of data")
         # Mean and Median lines only
         mean_line, = plt.plot(x_grid, overlay_stats["mean"], color=(0.2, 0.8, 0.2, 1.0), linewidth=1.8)
-        med_line, = plt.plot(x_grid, overlay_stats["median"], color=(0.85, 0.3, 0.05, 1.0), linewidth=2.0)
+        # median in purple to clearly differ from red outliers
+        med_line, = plt.plot(x_grid, overlay_stats["median"], color=(0.5, 0.2, 0.85, 1.0), linewidth=2.2)
         handles.extend([mean_line, med_line])
         labels.extend(["Mean", "Median"])
         if outlier_mask is not None and np.any(outlier_mask):
@@ -308,7 +337,7 @@ def _save_legend_panel(out_png: str):
         Patch(facecolor=(0.5, 0.6, 0.95, 0.20), edgecolor='none', label='100% (non-outliers)'),
         Patch(facecolor=(0.3, 0.4, 0.9, 0.35), edgecolor='none', label='50% of data'),
         Line2D([0], [0], color=(0.2, 0.8, 0.2, 1.0), lw=2.0, label='Mean'),
-        Line2D([0], [0], color=(0.85, 0.3, 0.05, 1.0), lw=2.5, label='Median'),
+        Line2D([0], [0], color=(0.5, 0.2, 0.85, 1.0), lw=2.5, label='Median'),
         Line2D([0], [0], color='r', lw=1.2, ls='--', label='Outlier')
     ]
     ax.legend(handles=handles, loc='center', framealpha=0.95)
@@ -373,8 +402,8 @@ def process_folder(clip_dir: str, out_prefix: str, label_name: str = "shoreline"
             overlay_stats["whisker_low"] = wl
             overlay_stats["whisker_high"] = wh
             outlier_mask = _detect_outliers(Y, overlay_stats, frac_threshold=outlier_frac, min_support_frac=min_support_frac)
-            # Cap outliers to at most a fraction of curves
-            outlier_mask = _cap_outliers(Y, overlay_stats, outlier_mask, cap_ratio=cap_outliers_ratio, min_support_frac=min_support_frac)
+            # Pick exactly two extremes when possible: one high and one low
+            outlier_mask = _pick_two_extreme_outliers(Y, overlay_stats, outlier_mask, min_support_frac=min_support_frac)
         except Exception as e:
             print(f"Overlay stats failed: {e}")
 
