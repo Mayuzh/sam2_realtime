@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import Dict, Any, Iterable, List
 
-def rows_from_labelme_json(json_path: Path, keep_metadata: bool = False) -> Iterable[Dict[str, Any]]:
+def rows_from_labelme_json(json_path: Path, keep_metadata: bool = False, y_flip: bool = True, drop_closing_point: bool = True) -> Iterable[Dict[str, Any]]:
     with open(json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
@@ -23,17 +23,26 @@ def rows_from_labelme_json(json_path: Path, keep_metadata: bool = False) -> Iter
         shape_type = shp.get("shape_type", "polygon").lower()
         points = shp.get("points", []) or []
 
-        if shape_type != "polygon":
-            continue  # only polygons supported
+        # Accept both polygon and polyline-like shapes
+        if shape_type not in {"polygon", "polyline", "linestrip"}:
+            continue
+
+        # Drop duplicate closing point (LabelMe polygons may include start==end)
+        if drop_closing_point and len(points) >= 2:
+            x0, y0 = points[0]
+            xN, yN = points[-1]
+            if float(x0) == float(xN) and float(y0) == float(yN):
+                points = points[:-1]
 
         for vi, pt in enumerate(points):
             x, y = float(pt[0]), float(pt[1])
+            yf = -y if y_flip else y
             row = {
                 "feature_id": feature_id,
                 "label": label,
                 "vertex_index": vi,
                 "x": x,
-                "y": -y,
+                "y": yf,
                 "group_id": group_id
             }
             if keep_metadata:
@@ -70,11 +79,13 @@ def write_csv(rows: Iterable[Dict[str, Any]], out_path: Path, keep_metadata: boo
             writer.writerow(row)
 
 def main():
-    ap = argparse.ArgumentParser(description="Convert LabelMe polygon JSON annotations to CSV for ArcGIS XY import.")
-    ap.add_argument("--input", default="./jennette_north/calm/17/", help="Path to a LabelMe JSON file or a folder of JSONs.")
-    ap.add_argument("--output", default="./csv/jennette_north/calm/17/", help="Path to the output CSV file OR an output folder when --per-file is used.")
+    ap = argparse.ArgumentParser(description="Convert LabelMe polygon/polyline JSON annotations to CSV for downstream plotting/GIS.")
+    ap.add_argument("--input", default="./jennette_north/active/13", help="Path to a LabelMe JSON file or a folder of JSONs.")
+    ap.add_argument("--output", default="./csv/jennette_north/active/13", help="Path to the output CSV file OR an output folder when --per-file is used.")
     ap.add_argument("--per-file", action="store_true", help="If set (or when --output is a directory), write one CSV per input JSON into the output folder.")
     ap.add_argument("--keep-metadata", action="store_true", help="Keep source_file/image_path/width/height columns. Default = False.")
+    ap.add_argument("--no-y-flip", action="store_true", help="Do not flip image Y to Y-up (default flips by exporting y=-y).")
+    ap.add_argument("--keep-closed", action="store_true", help="Keep duplicate closing point if present (default drops it).")
     args = ap.parse_args()
 
     input_path = Path(args.input)
@@ -88,7 +99,7 @@ def main():
         out_dir.mkdir(parents=True, exist_ok=True)
         total_rows = 0
         for jp in json_files:
-            rows = list(rows_from_labelme_json(jp, keep_metadata=args.keep_metadata))
+            rows = list(rows_from_labelme_json(jp, keep_metadata=args.keep_metadata, y_flip=not args.no_y_flip, drop_closing_point=not args.keep_closed))
             total_rows += len(rows)
             out_csv = out_dir / (jp.stem + ".csv")
             write_csv(rows, out_csv, keep_metadata=args.keep_metadata)
@@ -96,7 +107,7 @@ def main():
     else:
         all_rows = []
         for jp in json_files:
-            for row in rows_from_labelme_json(jp, keep_metadata=args.keep_metadata):
+            for row in rows_from_labelme_json(jp, keep_metadata=args.keep_metadata, y_flip=not args.no_y_flip, drop_closing_point=not args.keep_closed):
                 all_rows.append(row)
         write_csv(all_rows, out_path, keep_metadata=args.keep_metadata)
         print(f"Wrote {len(all_rows)} rows from {len(json_files)} JSON file(s) to {str(out_path)}")
