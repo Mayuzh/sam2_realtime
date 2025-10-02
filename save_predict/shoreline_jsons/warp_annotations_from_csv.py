@@ -4,6 +4,7 @@
 import argparse
 import os
 from pathlib import Path
+from typing import Dict, List
 import pandas as pd
 import numpy as np
 import math
@@ -164,11 +165,26 @@ def _gather_points_files(points_path: Path):
     raise FileNotFoundError(f"Could not find CSV(s) at {points_path}")
 
 
+def _find_csv_dirs(root: Path) -> Dict[Path, List[Path]]:
+    """Recursively find directories under root that directly contain .csv files.
+
+    Returns: mapping of directory path -> sorted list of CSV files in that directory.
+    """
+    result: Dict[Path, List[Path]] = {}
+    if not root.exists():
+        return result
+    for dirpath, _, filenames in os.walk(root):
+        csvs = [Path(dirpath) / fn for fn in filenames if fn.lower().endswith('.csv')]
+        if csvs:
+            result[Path(dirpath)] = sorted(csvs)
+    return result
+
+
 def main():
-    ap = argparse.ArgumentParser(description="Warp CSV points using projective (homography) or TPS transform with ArcGIS-style control points.")
-    ap.add_argument("--points", default="./csv/jennette_north/active/8/", help="Input points CSV or a folder of CSVs (each must contain columns x,y).")
-    ap.add_argument("--links", default="./links/control_points_jennette.txt", help="Control points file: ArcGIS link table (.txt) or generic CSV.")
-    ap.add_argument("--out", default="./csv/jennette_north_rec/active/8/", help="Output warped CSV file, or an output folder when --points is a folder.")
+    ap = argparse.ArgumentParser(description="Warp CSV points using projective (homography) or TPS. Supports recursive input root with mirrored output structure.")
+    ap.add_argument("--points", default="./csv/seabright_new/", help="Input CSV file OR a ROOT folder to scan recursively for folders that directly contain CSVs (with columns x,y).")
+    ap.add_argument("--links", default="./links/control_points_seabright_new.txt", help="Control points file: ArcGIS link table (.txt) or generic CSV.")
+    ap.add_argument("--out", default="./csv/seabright_new_rec/", help="Output ROOT folder (for directory input) or output CSV file (for single-file input). When points is a directory, the directory tree is mirrored under this root.")
     ap.add_argument("--method", choices=["projective", "tps"], default="projective", help="Transformation method: projective homography or thin-plate spline (default: projective).")
     ap.add_argument("--smooth", type=float, default=0.0, help="Smoothing (lambda) for TPS. Increase slightly (e.g. 1e-3) if TPS system is near-singular.")
     ap.add_argument("--y-down", action="store_true", help="Indicates source/control pixel coords are in a Y-down system (origin top-left). They will NOT be flipped; this flag only controls how --image-height flipping is interpreted.")
@@ -210,13 +226,61 @@ def main():
             print(f"[Projective] Control residual RMS: X={rms_x:.4f}  Y={rms_y:.4f}")
         transform_payload = ("projective", H)
 
-    # Determine batch or single mode
+    # Determine mode and paths
     points_path = Path(args.points)
     out_path = Path(args.out)
-    points_files = _gather_points_files(points_path)
 
-    # If multiple inputs, treat output as directory
-    batch_mode = len(points_files) > 1 or points_path.is_dir() or (out_path.exists() and out_path.is_dir()) or (out_path.suffix.lower() != ".csv")
+    # Case 1: points is a directory -> recursive scan and mirror structure
+    if points_path.is_dir():
+        dir_to_csvs = _find_csv_dirs(points_path)
+        if not dir_to_csvs:
+            print(f"No CSV files found under input root: {points_path}")
+            return
+        out_root = out_path
+        out_root.mkdir(parents=True, exist_ok=True)
+        total_rows = 0
+        total_files = 0
+        touched_dirs = 0
+        for csv_dir, csv_list in sorted(dir_to_csvs.items()):
+            rel = csv_dir.relative_to(points_path)
+            out_dir = out_root / rel
+            out_dir.mkdir(parents=True, exist_ok=True)
+            touched_dirs += 1
+            for csv_in in csv_list:
+                pts = pd.read_csv(csv_in)
+                lower = {c.lower(): c for c in pts.columns}
+                if "x" not in lower or "y" not in lower:
+                    print(f"Skipping {csv_in}: missing x/y columns")
+                    continue
+                xcol, ycol = lower["x"], lower["y"]
+                px = pts[xcol].to_numpy(float)
+                py = pts[ycol].to_numpy(float)
+                if args.flip_to_yup:
+                    if args.image_height is None:
+                        raise SystemExit("--flip-to-yup requires --image-height (same as used for control points).")
+                    H_img = args.image_height
+                    py = (H_img - 1) - py
+                if transform_payload[0] == "tps":
+                    _, model_x, model_y = transform_payload
+                    query = np.stack([px, py], axis=1)
+                    Xw = eval_tps(model_x, query)
+                    Yw = eval_tps(model_y, query)
+                else:
+                    _, Hm = transform_payload
+                    Xw, Yw = _eval_projective(Hm, px, py)
+                pts["X_warped"] = Xw
+                pts["Y_warped"] = Yw
+                out_csv = out_dir / f"{csv_in.stem}_warped.csv"
+                pts.to_csv(out_csv, index=False)
+                total_rows += len(pts)
+                total_files += 1
+        print(f"✅ Wrote {total_files} file(s) across {touched_dirs} folder(s) under: {str(out_root)} (total rows: {total_rows})")
+        return
+
+    # Case 2: Single-file or flat-folder fallback
+    points_files = _gather_points_files(points_path)
+    # If multiple inputs, treat output as directory in flat mode
+    batch_mode = len(points_files) > 1 or (out_path.exists() and out_path.is_dir()) or (out_path.suffix.lower() != ".csv")
 
     if batch_mode:
         out_dir = out_path if out_path.suffix == "" or out_path.is_dir() else out_path
@@ -234,16 +298,16 @@ def main():
             if args.flip_to_yup:
                 if args.image_height is None:
                     raise SystemExit("--flip-to-yup requires --image-height (same as used for control points).")
-                H = args.image_height
-                py = (H - 1) - py
+                H_img = args.image_height
+                py = (H_img - 1) - py
             if transform_payload[0] == "tps":
                 _, model_x, model_y = transform_payload
                 query = np.stack([px, py], axis=1)
                 Xw = eval_tps(model_x, query)
                 Yw = eval_tps(model_y, query)
             else:
-                _, H = transform_payload
-                Xw, Yw = _eval_projective(H, px, py)
+                _, Hm = transform_payload
+                Xw, Yw = _eval_projective(Hm, px, py)
             pts["X_warped"] = Xw
             pts["Y_warped"] = Yw
             out_csv = out_dir / f"{csv_in.stem}_warped.csv"
@@ -274,10 +338,10 @@ def main():
             _, H = transform_payload
             Xw, Yw = _eval_projective(H, px, py)
         pts["X_warped"] = Xw
-        pts["Y_warped"] = Yw
-        os.makedirs(os.path.dirname(os.path.abspath(args.out)) or ".", exist_ok=True)
-        pts.to_csv(args.out, index=False)
-        print(f"✅ Wrote warped CSV: {args.out} (columns added: X_warped, Y_warped)")
+    pts["Y_warped"] = Yw
+    os.makedirs(os.path.dirname(os.path.abspath(args.out)) or ".", exist_ok=True)
+    pts.to_csv(args.out, index=False)
+    print(f"✅ Wrote warped CSV: {args.out} (columns added: X_warped, Y_warped)")
 
 if __name__ == "__main__":
     main()

@@ -11,7 +11,14 @@ class Visualizer:
         self.saved_frame_count = 0
 
     def resize_mask(self, mask):
-        mask = torch.tensor(mask, device='cpu')
+        # Accept torch.Tensor or array-like; avoid constructing a tensor from a tensor (which warns)
+        if isinstance(mask, torch.Tensor):
+            mask = mask.detach().to('cpu')
+        else:
+            mask = torch.as_tensor(mask, device='cpu')
+        # Ensure float for interpolation
+        if not torch.is_floating_point(mask):
+            mask = mask.float()
         mask = torch.nn.functional.interpolate(
             mask,
             size=(self.video_height, self.video_width),
