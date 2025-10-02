@@ -11,12 +11,34 @@ def is_mask_lost(mask_tensor, threshold=0.001):
     return active_ratio < threshold
 
 def json_to_mask(json_path, image_shape):
+    """Create a binary mask from a LabelMe JSON, scaled to the target image_shape.
+
+    If the JSON contains imageWidth/imageHeight and they differ from image_shape,
+    the polygon points are scaled accordingly so the mask aligns with the target frame.
+    """
     with open(json_path, 'r') as f:
         data = json.load(f)
-    mask = np.zeros(image_shape[:2], dtype=np.uint8)
-    for shape in data['shapes']:
-        points = np.array(shape['points'], dtype=np.int32)
-        cv2.fillPoly(mask, [points], 1)
+
+    target_h, target_w = image_shape[:2]
+    src_w = data.get('imageWidth')
+    src_h = data.get('imageHeight')
+    # Compute per-axis scale; if source dims missing/zero, default to 1
+    if src_w and src_w > 0 and src_h and src_h > 0:
+        sx = float(target_w) / float(src_w)
+        sy = float(target_h) / float(src_h)
+    else:
+        sx = sy = 1.0
+
+    mask = np.zeros((target_h, target_w), dtype=np.uint8)
+    for shape in data.get('shapes', []):
+        pts = np.array(shape.get('points', []), dtype=np.float32)
+        if pts.size == 0:
+            continue
+        # Scale points from JSON coordinate space to target frame space
+        pts[:, 0] *= sx
+        pts[:, 1] *= sy
+        pts_i = np.round(pts).astype(np.int32)
+        cv2.fillPoly(mask, [pts_i], 1)
     return mask
 
 def write_labelme_json(image_path, coords, image_shape, label="shoreline", margin=10):

@@ -55,11 +55,26 @@ def rows_from_labelme_json(json_path: Path, keep_metadata: bool = False, y_flip:
             yield row
 
 def gather_json_files(input_path: Path) -> List[Path]:
+    """Backward-compatible: list JSONs only directly in the given folder, or the file itself."""
     if input_path.is_file() and input_path.suffix.lower() == ".json":
         return [input_path]
     if input_path.is_dir():
         return sorted([p for p in input_path.glob("*.json")])
     raise FileNotFoundError(f"Could not find JSON(s) at {input_path}")
+
+def find_json_dirs(root: Path) -> Dict[Path, List[Path]]:
+    """Recursively scan from root and return a mapping of directories that directly contain JSON files -> list of JSON Paths.
+
+    This stops at the directory level: each key directory contains JSONs among its immediate children.
+    """
+    result: Dict[Path, List[Path]] = {}
+    if not root.exists():
+        return result
+    for dirpath, _, filenames in os.walk(root):
+        jsons = [Path(dirpath) / fn for fn in filenames if fn.lower().endswith('.json')]
+        if jsons:
+            result[Path(dirpath)] = sorted(jsons)
+    return result
 
 def write_csv(rows: Iterable[Dict[str, Any]], out_path: Path, keep_metadata: bool) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -79,23 +94,53 @@ def write_csv(rows: Iterable[Dict[str, Any]], out_path: Path, keep_metadata: boo
             writer.writerow(row)
 
 def main():
-    ap = argparse.ArgumentParser(description="Convert LabelMe polygon/polyline JSON annotations to CSV for downstream plotting/GIS.")
-    ap.add_argument("--input", default="./jennette_north/active/13", help="Path to a LabelMe JSON file or a folder of JSONs.")
-    ap.add_argument("--output", default="./csv/jennette_north/active/13", help="Path to the output CSV file OR an output folder when --per-file is used.")
-    ap.add_argument("--per-file", action="store_true", help="If set (or when --output is a directory), write one CSV per input JSON into the output folder.")
+    ap = argparse.ArgumentParser(description="Convert LabelMe polygon/polyline JSON annotations to CSV. Supports recursive input root with mirrored output structure.")
+    ap.add_argument("--input", default="./temp/", help="Path to a LabelMe JSON file OR a ROOT folder to scan recursively for folders that directly contain JSONs.")
+    ap.add_argument("--output", default="./csv/seabright_new/", help="Output ROOT folder (for directory input) or output CSV file (for single-file input). When input is a directory, the directory tree is mirrored under this root.")
+    ap.add_argument("--per-file", action="store_true", help="For single-file or single-folder (non-recursive) input: if set (or when --output is a directory), write one CSV per input JSON into the output folder.")
     ap.add_argument("--keep-metadata", action="store_true", help="Keep source_file/image_path/width/height columns. Default = False.")
     ap.add_argument("--no-y-flip", action="store_true", help="Do not flip image Y to Y-up (default flips by exporting y=-y).")
     ap.add_argument("--keep-closed", action="store_true", help="Keep duplicate closing point if present (default drops it).")
     args = ap.parse_args()
 
     input_path = Path(args.input)
-    json_files = gather_json_files(input_path)
-
     out_path = Path(args.output)
+
+    # Case 1: Input is a directory -> recursive scan, mirror structure under output root
+    if input_path.is_dir():
+        dir_to_jsons = find_json_dirs(input_path)
+        if not dir_to_jsons:
+            print(f"No JSON files found under input root: {input_path}")
+            return
+        out_root = out_path
+        out_root.mkdir(parents=True, exist_ok=True)
+        total_json = 0
+        total_rows = 0
+        touched_dirs = 0
+        for json_dir, json_list in sorted(dir_to_jsons.items()):
+            rel = json_dir.relative_to(input_path)
+            out_dir = out_root / rel
+            out_dir.mkdir(parents=True, exist_ok=True)
+            touched_dirs += 1
+            for jp in json_list:
+                rows = list(rows_from_labelme_json(jp, keep_metadata=args.keep_metadata, y_flip=not args.no_y_flip, drop_closing_point=not args.keep_closed))
+                total_rows += len(rows)
+                out_csv = out_dir / (jp.stem + ".csv")
+                write_csv(rows, out_csv, keep_metadata=args.keep_metadata)
+                total_json += 1
+        print(f"Wrote {total_rows} rows from {total_json} JSON file(s) across {touched_dirs} folder(s) under: {out_root}")
+        return
+
+    # Case 2: Input is a single JSON file or a single non-recursive directory (fallback)
+    json_files = gather_json_files(input_path)
+    if not json_files:
+        print(f"No JSON files found at: {input_path}")
+        return
+
     treat_output_as_dir = args.per_file or (out_path.exists() and out_path.is_dir()) or (out_path.suffix.lower() != ".csv")
 
     if treat_output_as_dir:
-        out_dir = out_path if out_path.suffix == "" else out_path  # allow non-.csv paths
+        out_dir = out_path
         out_dir.mkdir(parents=True, exist_ok=True)
         total_rows = 0
         for jp in json_files:
