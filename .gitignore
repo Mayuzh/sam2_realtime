@@ -10,11 +10,10 @@ outputs/*
 checkpoints/*.pt
 *.idea
 
-/notebooks/train/
-/notebooks/training_output/
 /notebooks/videos/
-/notebooks/shoreline_jsons/
-model_predict/
+
+/model_predict/
+
 /save_predict/shoreline_jsons/seabright/
 /save_predict/shoreline_jsons/twinlakes/
 /save_predict/shoreline_jsons/jennette_north/
