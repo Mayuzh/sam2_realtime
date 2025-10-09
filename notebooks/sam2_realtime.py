@@ -172,10 +172,22 @@ def main():
                 frame_index=None
             )
 
-            frame_with_mask = cv2.resize(frame_with_mask, (1280, 960))
+            region_mask_json = "./region/walton_lighthouse-2025-05-13-233327Z.json"  # Update this path as needed
+            region_mask = json_to_mask(region_mask_json, frame.shape)
+            # Resize mask to match the actual overlay frame size
+            oh, ow = frame_with_mask.shape[:2]
+            region_mask = cv2.resize(region_mask.astype(np.uint8), (ow, oh), interpolation=cv2.INTER_NEAREST)
+            # Make sure mask is boolean
+            mask_bool = region_mask > 0.5
+            # Blend: inside mask shows original frame, outside shows overlay
+            frame_resized = cv2.resize(frame, (ow, oh))
+            blended = frame_with_mask.copy()
+            blended[mask_bool] = frame_resized[mask_bool]
+
+  
             cv2.namedWindow('Santa Cruz', cv2.WINDOW_NORMAL)
             cv2.resizeWindow('Santa Cruz', 1280, 960)
-            cv2.imshow("Santa Cruz", frame_with_mask)
+            cv2.imshow("Santa Cruz", blended)
 
             # Calculate and print the frame rate
             if frame_time > last_processed_time:

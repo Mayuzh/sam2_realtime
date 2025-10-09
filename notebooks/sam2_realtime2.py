@@ -74,9 +74,9 @@ def main():
     object_lost = False
     frames_since_loss = 0
 
-    prompt_img_site_a = cv2.imread("./masks/jennette_north-2025-07-21-235641Z.jpg")
+    prompt_img_site_a = cv2.imread("./masks/jennette_north-2025-10-09-130944Z.jpg")
     prompt_img_site_a = cv2.cvtColor(prompt_img_site_a, cv2.COLOR_BGR2RGB)
-    mask_json_site_a = "./masks/jennette_north-2025-07-21-235641Z.json"
+    mask_json_site_a = "./masks/jennette_north-2025-10-09-130944Z.json"
     mask_site_a = json_to_mask(mask_json_site_a, prompt_img_site_a.shape)
     mask_site_a = np.expand_dims(np.expand_dims(mask_site_a.astype(np.float32), axis=0), axis=0)
 
@@ -111,7 +111,8 @@ def main():
             frame_counter += 1
 
             img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            img_for_detection = cv2.GaussianBlur(img, (7, 7), 0)
+            #img_for_detection = cv2.GaussianBlur(img, (7, 7), 0)
+            img_for_detection = img
             H, W = img.shape[:2]
             start_y = int(H / 3)
             start_x = int(3 * W / 4)
@@ -210,12 +211,23 @@ def main():
             # frame_with_mask = overlay_mask_with_invisible_contour(
             #     frame,
             #     rock_mask_resized.cpu().numpy()[0, 0]
-            # )
+            # --- Blend original frame and overlay using region mask ---
+            
+            region_mask_json = "./region/jennette_north-2025-07-21-235641Z.json"  # Update this path as needed
+            region_mask = json_to_mask(region_mask_json, frame.shape)
+            # Resize mask to match display frame size (1280, 960)
+            region_mask = cv2.resize(region_mask.astype(np.uint8), (1280, 960), interpolation=cv2.INTER_NEAREST)
+            # Make sure mask is boolean
+            mask_bool = region_mask > 0.5
+            # Blend: inside mask shows original frame, outside shows overlay
+            frame_resized = cv2.resize(frame, (1280, 960))
+            blended = frame_with_mask.copy()
+            blended[mask_bool] = frame_resized[mask_bool]         
 
             frame_with_mask = cv2.resize(frame_with_mask, (1280, 960))
             cv2.namedWindow('Jennette North', cv2.WINDOW_NORMAL)
             cv2.resizeWindow('Jennette North', 1280, 960)
-            cv2.imshow("Jennette North", frame_with_mask)
+            cv2.imshow("Jennette North", blended)
 
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
