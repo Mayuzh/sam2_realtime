@@ -82,7 +82,7 @@ def main():
 
             img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-            img_for_detection = cv2.GaussianBlur(img, (85, 85), 0)
+            img_for_detection = cv2.GaussianBlur(img, (15, 15), 0)
 
             H, W = img.shape[:2]
             start_x = int(2 * W / 5)

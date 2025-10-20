@@ -17,9 +17,6 @@ checkpoints/*.pt
 /save_predict/shoreline_jsons/seabright/
 /save_predict/shoreline_jsons/twinlakes/
 /save_predict/shoreline_jsons/jennette_north/
-/save_predict/shoreline_jsons/mask/
-/save_predict/shoreline_jsons/filter.py
-/save_predict/shoreline_jsons/clean_shoreline_points.py
 /save_predict/videos/
 /save_predict/shoreline_jsons/csv/
 /save_predict/shoreline_jsons/seabright_new/
