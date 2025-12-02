@@ -15,8 +15,15 @@ checkpoints/*.pt
 /model_predict/
 
 /save_predict/shoreline_jsons/seabright/
+/save_predict/shoreline_jsons/seabright_new/
 /save_predict/shoreline_jsons/twinlakes/
 /save_predict/shoreline_jsons/jennette_north/
+
 /save_predict/videos/
-/save_predict/shoreline_jsons/csv/
-/save_predict/shoreline_jsons/seabright_new/
+
+/save_predict/shoreline_jsons/csv/twinlakes/
+/save_predict/shoreline_jsons/csv/twinlakes_rec/
+/save_predict/shoreline_jsons/csv/seabright/
+/save_predict/shoreline_jsons/csv/seabright_rec/
+/save_predict/shoreline_jsons/csv/seabright_new/
+/save_predict/shoreline_jsons/csv/seabright_new_rec/
