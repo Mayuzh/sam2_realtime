@@ -21,6 +21,7 @@ checkpoints/*.pt
 
 /save_predict/videos/
 
+
 /save_predict/shoreline_jsons/csv/twinlakes/
 /save_predict/shoreline_jsons/csv/twinlakes_rec/
 /save_predict/shoreline_jsons/csv/seabright/
