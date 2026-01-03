@@ -28,3 +28,7 @@ checkpoints/*.pt
 /save_predict/shoreline_jsons/csv/seabright_rec/
 /save_predict/shoreline_jsons/csv/seabright_new/
 /save_predict/shoreline_jsons/csv/seabright_new_rec/
+
+/venv
+
+package-list.txt
