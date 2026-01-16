@@ -8,14 +8,67 @@ from datetime import datetime
 import threading
 from sam2.build_sam import build_sam2_object_tracker
 import torch.nn.functional as F
+from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
+import uvicorn
+import asyncio
 
 from utils.config import *
 from utils.helpers import is_mask_lost, json_to_mask, write_labelme_json
 import utils.streaming as streaming
 from utils.visualizer import Visualizer
 
+# Global frame sharing for web server
+latest_processed_frame = None
+frame_lock = threading.Lock()
+
+# FastAPI app
+app = FastAPI(title="Walton Lighthouse Stream")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.get("/")
+async def root():
+    return {"status": "running", "camera": "walton_lighthouse", "port": 8000}
+
+@app.get("/stream")
+async def stream():
+    async def generate():
+        while True:
+            try:
+                with frame_lock:
+                    frame = latest_processed_frame
+                if frame is not None:
+                    success, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                    if success:
+                        yield (b'--frame\r\n'
+                               b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+                await asyncio.sleep(0.033)  # ~30 FPS
+            except Exception as e:
+                print(f"Stream error: {e}")
+                await asyncio.sleep(0.1)
+    return StreamingResponse(generate(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+def run_server():
+    config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="info", access_log=True)
+    server = uvicorn.Server(config)
+    import asyncio
+    asyncio.run(server.serve())
+
 def main():
-    global capture_running
+    global capture_running, latest_processed_frame
+
+    # Start web server in background thread
+    server_thread = threading.Thread(target=run_server, daemon=True)
+    server_thread.start()
+    time.sleep(2) 
+    print("Server start at http://localhost:8000/stream")
 
     print("Initializing SAM2...")
     sam = build_sam2_object_tracker(
@@ -72,7 +125,7 @@ def main():
                 frame_time = streaming.latest_frame_time if streaming.latest_frame_time is not None else 0
 
             if frame is None:
-                print("No frame available, skipping...")
+#                print("No frame available, skipping...")
                 continue
 
             if frame_time - last_processed_time < FRAME_INTERVAL:
@@ -119,7 +172,7 @@ def main():
                         frames_since_loss = 0
                 else:
                     frames_since_loss += 1
-                    print(f"Waiting... {frames_since_loss}/{RETRY_FRAMES} frames since loss.")
+                    # print(f"Waiting... {frames_since_loss}/{RETRY_FRAMES} frames since loss.")
 
                     if frames_since_loss >= RETRY_FRAMES:
                         print("Reinitializing with mask prompt.")
@@ -184,6 +237,9 @@ def main():
             blended = frame_with_mask.copy()
             blended[mask_bool] = frame_resized[mask_bool]
 
+            # Share frame with web server
+            with frame_lock:
+                latest_processed_frame = blended.copy()
   
             cv2.namedWindow('Santa Cruz', cv2.WINDOW_NORMAL)
             cv2.resizeWindow('Santa Cruz', 1280, 960)
@@ -197,7 +253,7 @@ def main():
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 streaming.capture_running = False  # Stop the capture thread
                 break
-
+                
     streaming.capture_running = False
     capture_thread.join()
     print("detroying windows...")
