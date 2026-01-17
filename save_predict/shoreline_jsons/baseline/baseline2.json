@@ -1,0 +1,27 @@
+{
+  "version": "0.4.30",
+  "flags": {},
+  "shapes": [
+    {
+      "label": "baseline",
+      "text": "",
+      "points": [
+        [
+          0.0,
+          94.0
+        ],
+        [
+          0.0,
+          959.0
+        ]
+      ],
+      "group_id": null,
+      "shape_type": "polygon",
+      "flags": {}
+    }
+  ],
+  "imagePath": "baseline2.png",
+  "imageData": null,
+  "imageHeight": 960,
+  "imageWidth": 1280
+}

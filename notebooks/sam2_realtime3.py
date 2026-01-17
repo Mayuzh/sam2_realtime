@@ -14,6 +14,42 @@ from utils.helpers import is_mask_lost, json_to_mask, write_labelme_json
 import utils.streaming3 as streaming
 from utils.visualizer import Visualizer
 
+def overlay_mask_with_invisible_contour(frame, mask):
+    """
+    Makes contour lines within the mask area transparent by blending with background.
+    """
+    # Convert mask to binary
+    binary_mask = (mask > 0).astype(np.uint8) * 255
+    
+    # Find contours
+    contours, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    # Create a contour mask (1px lines)
+    contour_mask = np.zeros_like(binary_mask)
+    cv2.drawContours(contour_mask, contours, -1, 255, thickness=1)
+
+    # Ensure `contour_mask` matches the size and type of `frame`
+    contour_mask = cv2.resize(contour_mask, (frame.shape[1], frame.shape[0]))
+    if len(contour_mask.shape) == 2:
+        contour_mask = cv2.cvtColor(contour_mask, cv2.COLOR_GRAY2BGR)
+
+    # Create a mask where we want to keep original pixels (not part of contours inside mask)
+    keep_mask = cv2.bitwise_or(
+        cv2.bitwise_not(contour_mask[:, :, 0]),  # Not part of any contour
+        cv2.bitwise_and(contour_mask[:, :, 0], cv2.bitwise_not(binary_mask))  # Or contours outside main mask
+    )
+
+    # Create an image with only the contours we want to keep
+    kept_contours = cv2.bitwise_and(frame, frame, mask=keep_mask)
+
+    # Create background (original image without any contours)
+    background = cv2.bitwise_and(frame, frame, mask=cv2.bitwise_not(contour_mask[:, :, 0]))
+    
+    # Combine
+    result = cv2.add(background, kept_contours)
+    
+    return result
+
 def main():
     global capture_running
 
@@ -38,13 +74,18 @@ def main():
     object_lost = False
     frames_since_loss = 0
 
-    prompt_img_site_a = cv2.imread("./masks/jennette_north-2025-07-21-235641Z.jpg")
+    # prompt_img_site_a = cv2.imread("./masks/tmmc_prls-2025-07-15-221433Z.jpg")
+    # prompt_img_site_a = cv2.cvtColor(prompt_img_site_a, cv2.COLOR_BGR2RGB)
+    # mask_json_site_a = "./masks/tmmc_prls-2025-07-15-221433Z.json"
+    # mask_site_a = json_to_mask(mask_json_site_a, prompt_img_site_a.shape)
+    # mask_site_a = np.expand_dims(np.expand_dims(mask_site_a.astype(np.float32), axis=0), axis=0)
+    prompt_img_site_a = cv2.imread("./masks/santacruzwharf-2026-01-05-000751Z.jpg")
     prompt_img_site_a = cv2.cvtColor(prompt_img_site_a, cv2.COLOR_BGR2RGB)
-    mask_json_site_a = "./masks/jennette_north-2025-07-21-235641Z.json"
+    mask_json_site_a = "./masks/santacruzwharf-2026-01-05-000751Z.json"
     mask_site_a = json_to_mask(mask_json_site_a, prompt_img_site_a.shape)
     mask_site_a = np.expand_dims(np.expand_dims(mask_site_a.astype(np.float32), axis=0), axis=0)
 
-    rock_mask_json = "./region/tmmc_prls-2025-07-15-221433Z.json"
+    rock_mask_json = "./region/santacruzwharf-2026-01-05-000751Z.json"
     rock_mask = json_to_mask(rock_mask_json, prompt_img_site_a.shape)
     rock_mask = np.expand_dims(np.expand_dims(rock_mask.astype(np.float32), axis=0), axis=0)
 
@@ -75,15 +116,17 @@ def main():
             frame_counter += 1
 
             img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            img_for_detection = cv2.GaussianBlur(img, (3, 3), 0)
+            #img_for_detection = cv2.GaussianBlur(img, (15, 15), 0)
+            img_for_detection = img
             H, W = img.shape[:2]
-            start_y = int(2 * H / 5)
-            start_x = int(W / 4)
+            start_y = int(3 * H / 4)
+            start_x = int(1 * W / 2)
             #bbox = np.array([[[start_x, 0], [W, H]]])
 
             if first_frame:
                 print("First frame: initializing with prompt points.")
                 current_img = prompt_img_site_a
+                current_mask = mask_site_a
                 #sam_out = sam.track_new_object(img=current_img, mask=current_mask)
                 point_coords = np.array([[start_x, start_y]])  # Example point coordinates
                 sam_out = sam.track_new_object(img=current_img, points=point_coords)  # Pass only point_coords
@@ -171,10 +214,26 @@ def main():
                 frame_index=None
             )
 
+            # frame_with_mask = overlay_mask_with_invisible_contour(
+            #     frame,
+            #     rock_mask_resized.cpu().numpy()[0, 0]
+            # --- Blend original frame and overlay using region mask ---
+            
+            region_mask_json = "./region/santacruzwharf-2026-01-05-000751Z.json"  # Update this path as needed
+            region_mask = json_to_mask(region_mask_json, frame.shape)
+            # Resize mask to match display frame size (1280, 960)
+            region_mask = cv2.resize(region_mask.astype(np.uint8), (1280, 960), interpolation=cv2.INTER_NEAREST)
+            # Make sure mask is boolean
+            mask_bool = region_mask > 0.5
+            # Blend: inside mask shows original frame, outside shows overlay
+            frame_resized = cv2.resize(frame, (1280, 960))
+            blended = frame_with_mask.copy()
+            blended[mask_bool] = frame_resized[mask_bool]         
+
             frame_with_mask = cv2.resize(frame_with_mask, (1280, 960))
-            cv2.namedWindow('SAM2 Realtime Tracking', cv2.WINDOW_NORMAL)
-            cv2.resizeWindow('SAM2 Realtime Tracking', 1280, 960)
-            cv2.imshow("SAM2 Realtime Tracking", frame_with_mask)
+            cv2.namedWindow('Point Reyes', cv2.WINDOW_NORMAL)
+            cv2.resizeWindow('Point Reyes', 1280, 960)
+            cv2.imshow("Point Reyes", blended)
 
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break

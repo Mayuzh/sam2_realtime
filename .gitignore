@@ -18,6 +18,7 @@ checkpoints/*.pt
 /save_predict/shoreline_jsons/seabright_new/
 /save_predict/shoreline_jsons/twinlakes/
 /save_predict/shoreline_jsons/jennette_north/
+/save_predict/shoreline_jsons/jennette_pier/
 
 /save_predict/videos/
 
@@ -28,6 +29,7 @@ checkpoints/*.pt
 /save_predict/shoreline_jsons/csv/seabright_rec/
 /save_predict/shoreline_jsons/csv/seabright_new/
 /save_predict/shoreline_jsons/csv/seabright_new_rec/
+/save_predict/shoreline_jsons/csv/jennette_north/
 
 /venv
 
