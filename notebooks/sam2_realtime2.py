@@ -8,11 +8,61 @@ from datetime import datetime
 import threading
 from sam2.build_sam import build_sam2_object_tracker
 import torch.nn.functional as F
+from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
+import uvicorn
+import asyncio
 
 from utils.config2 import *
 from utils.helpers import is_mask_lost, json_to_mask, write_labelme_json
 import utils.streaming2 as streaming
 from utils.visualizer import Visualizer
+
+# Global frame sharing for web server
+latest_processed_frame = None
+frame_lock = threading.Lock()
+
+# FastAPI app
+app = FastAPI(title="Jennette North Stream")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.get("/")
+async def root():
+    return {"status": "running", "camera": "jennette_north", "port": 8001}
+
+@app.get("/stream")
+async def stream():
+    async def generate():
+        while True:
+            try:
+                with frame_lock:
+                    frame = latest_processed_frame
+                if frame is not None:
+                    _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+                await asyncio.sleep(0.1)  # ~10 FPS
+            except Exception as e:
+                print(f"Stream error: {e}")
+                await asyncio.sleep(0.1)
+    return StreamingResponse(generate(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+def run_server():
+    config = uvicorn.Config(app, host="0.0.0.0", port=8001, log_level="info", access_log=True)
+    server = uvicorn.Server(config)
+    import asyncio
+    asyncio.run(server.serve())
+
+# Global frame sharing for web server
+latest_processed_frame = None
+frame_lock = threading.Lock()
 
 def overlay_mask_with_invisible_contour(frame, mask):
     """
@@ -51,7 +101,13 @@ def overlay_mask_with_invisible_contour(frame, mask):
     return result
 
 def main():
-    global capture_running
+    global capture_running, latest_processed_frame
+
+    # Start web server in background thread
+    server_thread = threading.Thread(target=run_server, daemon=True)
+    server_thread.start()
+    time.sleep(2)
+    print("Server start at http://localhost:8001/stream")
 
     print("Initializing SAM2...")
     sam = build_sam2_object_tracker(
@@ -223,6 +279,10 @@ def main():
             frame_resized = cv2.resize(frame, (1280, 960))
             blended = frame_with_mask.copy()
             blended[mask_bool] = frame_resized[mask_bool]         
+
+            # Share frame with web server
+            with frame_lock:
+                latest_processed_frame = blended.copy()
 
             frame_with_mask = cv2.resize(frame_with_mask, (1280, 960))
             cv2.namedWindow('Jennette North', cv2.WINDOW_NORMAL)
