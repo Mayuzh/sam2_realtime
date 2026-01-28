@@ -7,16 +7,16 @@
       "text": "",
       "points": [
         [
-          0.0,
-          94.0
-        ],
-        [
-          429.795918367347,
-          305.0
+          519.591836734694,
+          479.48979591836735
         ],
         [
           0.0,
-          959.0
+          332.0
+        ],
+        [
+          1279.0,
+          260.0
         ]
       ],
       "group_id": null,
@@ -24,7 +24,7 @@
       "flags": {}
     }
   ],
-  "imagePath": "baseline2.png",
+  "imagePath": "baseline.png",
   "imageData": null,
   "imageHeight": 960,
   "imageWidth": 1280,

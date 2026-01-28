@@ -95,8 +95,8 @@ def write_csv(rows: Iterable[Dict[str, Any]], out_path: Path, keep_metadata: boo
 
 def main():
     ap = argparse.ArgumentParser(description="Convert LabelMe polygon/polyline JSON annotations to CSV. Supports recursive input root with mirrored output structure.")
-    ap.add_argument("--input", default="./jennette_pier/", help="Path to a LabelMe JSON file OR a ROOT folder to scan recursively for folders that directly contain JSONs.")
-    ap.add_argument("--output", default="./csv/jennette_north/offshore_high", help="Output ROOT folder (for directory input) or output CSV file (for single-file input). When input is a directory, the directory tree is mirrored under this root.")
+    ap.add_argument("--input", default="./twinlakes/onshore_low", help="Path to a LabelMe JSON file OR a ROOT folder to scan recursively for folders that directly contain JSONs.")
+    ap.add_argument("--output", default="./csv/twinlakes/onshore_low", help="Output ROOT folder (for directory input) or output CSV file (for single-file input). When input is a directory, the directory tree is mirrored under this root.")
     ap.add_argument("--per-file", action="store_true", help="For single-file or single-folder (non-recursive) input: if set (or when --output is a directory), write one CSV per input JSON into the output folder.")
     ap.add_argument("--keep-metadata", action="store_true", help="Keep source_file/image_path/width/height columns. Default = False.")
     ap.add_argument("--no-y-flip", action="store_true", help="Do not flip image Y to Y-up (default flips by exporting y=-y).")

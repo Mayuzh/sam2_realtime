@@ -30,7 +30,7 @@ def main():
     parser.add_argument('--sdp-math-only', action='store_true', help='Force math attention backend to silence flash/memory-efficient warnings.')
     # New: saving shoreline frames/coords under a root per-clip subfolder
     parser.add_argument('--save-shorelines', action='store_true', help='Save shoreline frames and LabelMe JSONs for each frame.')
-    parser.add_argument('--save-root', default='./shoreline_jsons/twinlakes/onshore_high/', help='Root folder under which a per-clip subfolder will be created.')
+    parser.add_argument('--save-root', default='./shoreline_jsons/twinlakes/onshore_low/', help='Root folder under which a per-clip subfolder will be created.')
     parser.add_argument('--show-ignore-overlay', action='store_true', help='Draw a yellow translucent overlay for the ignore region (debug display only).')
     args = parser.parse_args()
 
@@ -173,8 +173,8 @@ def main():
             # ORIGINAL: img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             img = cv2.cvtColor(frame_for_model, cv2.COLOR_BGR2RGB)  # use possibly blacked-out, resized frame
 
-            #img_for_detection = cv2.GaussianBlur(img, (3, 3), 0) 
-            img_for_detection = img
+            img_for_detection = cv2.GaussianBlur(img, (15, 15), 0) 
+            #img_for_detection = img
 
             H, W = img.shape[:2]
             start_x = int(1 * W / 4)

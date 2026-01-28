@@ -120,8 +120,8 @@ def process_json(json_path: str, mask_polys: List[List[Tuple[float, float]]], ed
 
 def main():
     parser = argparse.ArgumentParser(description='Clean shoreline JSON points by removing ones inside mask & near edges.')
-    parser.add_argument('--json-dir', '-d', default='./jennette_pier/', help='Directory of shoreline JSON files (default: ./twinlakes)')
-    parser.add_argument('--mask-json', '-m', default='./mask/jennette_north-2025-04-27-151814Z_000046.json', help='Path to rock mask JSON (default: ./masks/rock_mask.json)')
+    parser.add_argument('--json-dir', '-d', default='./twinlakes/onshore_low/', help='Directory of shoreline JSON files (default: ./twinlakes)')
+    parser.add_argument('--mask-json', '-m', default='./mask/walton_lighthouse-2024-11-16-193441Z_000001.json', help='Path to rock mask JSON (default: ./masks/rock_mask.json)')
     parser.add_argument('--mask-label', default='rock', help='Mask label filter (default: rock)')
     parser.add_argument('--edge-margin', type=int, default=5, help='Pixel margin from each edge to remove points.')
     parser.add_argument('--backup', action='store_true', help='Create .bak with original JSON before first overwrite.')
