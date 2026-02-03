@@ -60,10 +60,6 @@ def run_server():
     import asyncio
     asyncio.run(server.serve())
 
-# Global frame sharing for web server
-latest_processed_frame = None
-frame_lock = threading.Lock()
-
 def overlay_mask_with_invisible_contour(frame, mask):
     """
     Makes contour lines within the mask area transparent by blending with background.
@@ -284,13 +280,17 @@ def main():
             with frame_lock:
                 latest_processed_frame = blended.copy()
 
-            frame_with_mask = cv2.resize(frame_with_mask, (1280, 960))
-            cv2.namedWindow('Jennette North', cv2.WINDOW_NORMAL)
-            cv2.resizeWindow('Jennette North', 1280, 960)
-            cv2.imshow("Jennette North", blended)
+            # Commented out GUI
+            # frame_with_mask = cv2.resize(frame_with_mask, (1280, 960))
+            # cv2.namedWindow('Jennette North', cv2.WINDOW_NORMAL)
+            # cv2.resizeWindow('Jennette North', 1280, 960)
+            # cv2.imshow("Jennette North", blended)
 
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
+            # if cv2.waitKey(1) & 0xFF == ord('q'):
+            #     break
+            
+            # Commented in for headless mode (No GUI)
+            time.sleep(0.001)
 
     streaming.capture_running = False
     capture_thread.join()

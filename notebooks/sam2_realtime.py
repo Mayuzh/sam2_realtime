@@ -241,18 +241,23 @@ def main():
             with frame_lock:
                 latest_processed_frame = blended.copy()
   
-            cv2.namedWindow('Santa Cruz', cv2.WINDOW_NORMAL)
-            cv2.resizeWindow('Santa Cruz', 1280, 960)
-            cv2.imshow("Santa Cruz", blended)
+            # Commented out GUI
+            # cv2.namedWindow('Santa Cruz', cv2.WINDOW_NORMAL)
+            # cv2.resizeWindow('Santa Cruz', 1280, 960)
+            # cv2.imshow("Santa Cruz", blended)
 
             # Calculate and print the frame rate
             if frame_time > last_processed_time:
                 frame_rate = 1 / (frame_time - last_processed_time)
                 print(f"Frame Rate: {frame_rate:.2f} FPS")
 
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                streaming.capture_running = False  # Stop the capture thread
-                break
+            # Commented out GUI
+            # if cv2.waitKey(1) & 0xFF == ord('q'):
+            #     streaming.capture_running = False  # Stop the capture thread
+            #     break
+            
+            # Commented in for headless mode (No GUI)
+            time.sleep(0.001)
                 
     streaming.capture_running = False
     capture_thread.join()

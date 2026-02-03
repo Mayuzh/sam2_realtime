@@ -227,17 +227,21 @@ def main():
             with frame_lock:
                 latest_processed_frame = frame_with_mask.copy()
 
-            frame_with_mask = cv2.resize(frame_with_mask, (1280, 960))
-            cv2.namedWindow('SAM2 Realtime Tracking', cv2.WINDOW_NORMAL)
-            cv2.resizeWindow('SAM2 Realtime Tracking', 1280, 960)
-            cv2.imshow("SAM2 Realtime Tracking", frame_with_mask)
+            # Commented out GUI
+            # frame_with_mask = cv2.resize(frame_with_mask, (1280, 960))
+            # cv2.namedWindow('SAM2 Realtime Tracking', cv2.WINDOW_NORMAL)
+            # cv2.resizeWindow('SAM2 Realtime Tracking', 1280, 960)
+            # cv2.imshow("SAM2 Realtime Tracking", frame_with_mask)
 
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
+            # if cv2.waitKey(1) & 0xFF == ord('q'):
+            #     break
+            
+            # Commented in for headless mode (No GUI)
+            time.sleep(0.001)
 
     streaming.capture_running = False
     capture_thread.join()
-    cv2.destroyAllWindows()
+    # cv2.destroyAllWindows()  # Not needed in headless mode
 
 if __name__ == "__main__":
     main()

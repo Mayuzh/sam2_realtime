@@ -1,0 +1,23 @@
+tunnel: 70209acc-9463-4898-a962-a4167f00f7d6
+credentials-file: C:\Users\Jeff\.cloudflared\70209acc-9463-4898-a962-a4167f00f7d6.json
+
+ingress:
+  - hostname: walton.realtimeshorelinestream.store
+    service: http://localhost:8000
+    originRequest:
+      noTLSVerify: true
+      disableChunkedEncoding: true
+      http2Origin: false
+  - hostname: jennette.realtimeshorelinestream.store
+    service: http://localhost:8001
+    originRequest:
+      noTLSVerify: true
+      disableChunkedEncoding: true
+      http2Origin: false
+  - hostname: tmmc.realtimeshorelinestream.store
+    service: http://localhost:8002
+    originRequest:
+      noTLSVerify: true
+      disableChunkedEncoding: true
+      http2Origin: false
+  - service: http_status:404
