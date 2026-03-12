@@ -8,6 +8,9 @@ from typing import Dict, List
 import pandas as pd
 import numpy as np
 import math
+from scipy.signal import savgol_filter
+from scipy.interpolate import UnivariateSpline
+from scipy.spatial.distance import cdist
 
 def _read_any_table(path):
     # Try flexible parsing (handles commas, tabs, multiple spaces)
@@ -118,6 +121,67 @@ def eval_tps(model, query_pts):
     return (Pq @ a) + (Kq @ w)
 
 # -----------------------------
+# Affine (1st order polynomial) Transform Helpers
+# -----------------------------
+def _fit_affine(src_x, src_y, dst_x, dst_y):
+    """Fit affine transformation (1st order polynomial) using least squares.
+    
+    X = a0 + a1*x + a2*y
+    Y = b0 + b1*x + b2*y
+    
+    Requires at least 3 control points.
+    Returns 2x3 affine matrix [[a1, a2, a0], [b1, b2, b0]].
+    """
+    src_x = np.asarray(src_x, dtype=float)
+    src_y = np.asarray(src_y, dtype=float)
+    dst_x = np.asarray(dst_x, dtype=float)
+    dst_y = np.asarray(dst_y, dtype=float)
+    n = src_x.shape[0]
+    if n < 3:
+        raise ValueError("Affine transform requires at least 3 control points.")
+    
+    # Build design matrix [x, y, 1] for each point
+    A = np.column_stack([src_x, src_y, np.ones(n)])
+    
+    # Solve for X transformation: X = a0 + a1*x + a2*y
+    coeffs_x, residuals_x, rank_x, s_x = np.linalg.lstsq(A, dst_x, rcond=None)
+    
+    # Solve for Y transformation: Y = b0 + b1*x + b2*y
+    coeffs_y, residuals_y, rank_y, s_y = np.linalg.lstsq(A, dst_y, rcond=None)
+    
+    if rank_x < 3 or rank_y < 3:
+        print(f"Warning: affine matrix rank deficient (rank_x={rank_x}, rank_y={rank_y})")
+    
+    # Return as 2x3 matrix: [[a1, a2, a0], [b1, b2, b0]]
+    affine_matrix = np.array([
+        [coeffs_x[0], coeffs_x[1], coeffs_x[2]],
+        [coeffs_y[0], coeffs_y[1], coeffs_y[2]]
+    ], dtype=float)
+    
+    return affine_matrix
+
+def _eval_affine(affine_matrix, x, y):
+    """Apply affine transformation to points.
+    
+    Args:
+        affine_matrix: 2x3 matrix [[a1, a2, a0], [b1, b2, b0]]
+        x, y: input coordinates (arrays or scalars)
+    
+    Returns:
+        X, Y: transformed coordinates
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    
+    # X = a1*x + a2*y + a0
+    X = affine_matrix[0, 0] * x + affine_matrix[0, 1] * y + affine_matrix[0, 2]
+    
+    # Y = b1*x + b2*y + b0
+    Y = affine_matrix[1, 0] * x + affine_matrix[1, 1] * y + affine_matrix[1, 2]
+    
+    return X, Y
+
+# -----------------------------
 # Projective (Homography) Transform Helpers
 # -----------------------------
 def _fit_projective(src_x, src_y, dst_x, dst_y):
@@ -180,17 +244,214 @@ def _find_csv_dirs(root: Path) -> Dict[Path, List[Path]]:
     return result
 
 
+# -----------------------------
+# Smoothing and Filtering Functions
+# -----------------------------
+def smooth_moving_average(x, y, window=5):
+    """Apply moving average smoothing to x, y coordinates."""
+    if len(x) < window:
+        return x, y
+    x_smooth = np.convolve(x, np.ones(window)/window, mode='same')
+    y_smooth = np.convolve(y, np.ones(window)/window, mode='same')
+    return x_smooth, y_smooth
+
+
+def smooth_savgol(x, y, window=11, polyorder=3):
+    """Apply Savitzky-Golay filter for smoothing."""
+    if len(x) < window:
+        window = len(x) if len(x) % 2 == 1 else len(x) - 1
+        if window < polyorder + 2:
+            return x, y
+    x_smooth = savgol_filter(x, window, polyorder)
+    y_smooth = savgol_filter(y, window, polyorder)
+    return x_smooth, y_smooth
+
+
+def smooth_spline(x, y, s=None, k=3):
+    """Fit a spline through the points and resample.
+    
+    Args:
+        x, y: coordinates
+        s: smoothing factor (if None, uses len(x))
+        k: spline degree (1=linear, 2=quadratic, 3=cubic)
+    """
+    if len(x) < k + 1:
+        return x, y
+    # Create parametric representation using cumulative distance
+    t = np.zeros(len(x))
+    t[1:] = np.sqrt(np.diff(x)**2 + np.diff(y)**2)
+    t = np.cumsum(t)
+    
+    if s is None:
+        s = len(x)
+    
+    try:
+        spl_x = UnivariateSpline(t, x, s=s, k=k)
+        spl_y = UnivariateSpline(t, y, s=s, k=k)
+        x_smooth = spl_x(t)
+        y_smooth = spl_y(t)
+        return x_smooth, y_smooth
+    except Exception as e:
+        print(f"Warning: Spline smoothing failed: {e}. Returning original points.")
+        return x, y
+
+
+def remove_outliers_zscore(x, y, threshold=3.0):
+    """Remove points that are outliers based on distance from neighbors.
+    
+    Uses z-score of point-to-point distances to identify outliers.
+    """
+    if len(x) < 3:
+        return x, y
+    
+    # Compute distances between consecutive points
+    dists = np.sqrt(np.diff(x)**2 + np.diff(y)**2)
+    
+    # Z-score of distances
+    if len(dists) > 0 and np.std(dists) > 0:
+        z_scores = np.abs((dists - np.mean(dists)) / np.std(dists))
+        # Keep points where both incoming and outgoing distances are reasonable
+        keep_mask = np.ones(len(x), dtype=bool)
+        # Mark points with abnormally large distances
+        for i in range(len(z_scores)):
+            if z_scores[i] > threshold:
+                # Remove the point after the large jump
+                if i + 1 < len(keep_mask):
+                    keep_mask[i + 1] = False
+        
+        x_filtered = x[keep_mask]
+        y_filtered = y[keep_mask]
+        return x_filtered, y_filtered
+    
+    return x, y
+
+
+def remove_outliers_ransac(x, y, max_trials=100, residual_threshold=None):
+    """Remove outliers using RANSAC-like approach fitting a polynomial."""
+    if len(x) < 10:
+        return x, y
+    
+    # Create parametric representation
+    t = np.arange(len(x))
+    
+    if residual_threshold is None:
+        # Auto-set threshold based on data spread
+        residual_threshold = np.std(np.sqrt(np.diff(x)**2 + np.diff(y)**2)) * 2
+    
+    # Fit polynomial
+    try:
+        poly_x = np.polyfit(t, x, deg=3)
+        poly_y = np.polyfit(t, y, deg=3)
+        x_fit = np.polyval(poly_x, t)
+        y_fit = np.polyval(poly_y, t)
+        
+        # Compute residuals
+        residuals = np.sqrt((x - x_fit)**2 + (y - y_fit)**2)
+        
+        # Keep inliers
+        inlier_mask = residuals < residual_threshold
+        return x[inlier_mask], y[inlier_mask]
+    except:
+        return x, y
+
+
+def resample_uniform(x, y, num_points=None, spacing=None):
+    """Resample points uniformly along the curve.
+    
+    Args:
+        x, y: input coordinates
+        num_points: number of output points (mutually exclusive with spacing)
+        spacing: desired spacing between points
+    """
+    if len(x) < 2:
+        return x, y
+    
+    # Compute cumulative distance
+    dists = np.sqrt(np.diff(x)**2 + np.diff(y)**2)
+    cum_dist = np.insert(np.cumsum(dists), 0, 0)
+    total_length = cum_dist[-1]
+    
+    # Determine sample points
+    if spacing is not None:
+        num_points = int(total_length / spacing) + 1
+    elif num_points is None:
+        num_points = len(x)
+    
+    # Interpolate uniformly
+    t_uniform = np.linspace(0, total_length, num_points)
+    x_uniform = np.interp(t_uniform, cum_dist, x)
+    y_uniform = np.interp(t_uniform, cum_dist, y)
+    
+    return x_uniform, y_uniform
+
+
+def apply_smoothing_pipeline(Xw, Yw, args):
+    """Apply the complete smoothing and filtering pipeline to warped coordinates.
+    
+    Args:
+        Xw, Yw: warped coordinates (numpy arrays)
+        args: parsed command-line arguments
+    
+    Returns:
+        X_smooth, Y_smooth: processed coordinates
+    """
+    X, Y = Xw.copy(), Yw.copy()
+    
+    # Step 1: Remove outliers (before smoothing)
+    if args.remove_outliers == "zscore":
+        X, Y = remove_outliers_zscore(X, Y, threshold=args.outlier_threshold)
+        print(f"  Outlier removal (z-score): {len(Xw)} -> {len(X)} points")
+    elif args.remove_outliers == "ransac":
+        X, Y = remove_outliers_ransac(X, Y, residual_threshold=args.outlier_threshold)
+        print(f"  Outlier removal (RANSAC): {len(Xw)} -> {len(X)} points")
+    
+    # Step 2: Apply smoothing
+    if args.smooth_method == "moving_average":
+        X, Y = smooth_moving_average(X, Y, window=args.smooth_window)
+        print(f"  Smoothing: moving average (window={args.smooth_window})")
+    elif args.smooth_method == "savgol":
+        X, Y = smooth_savgol(X, Y, window=args.smooth_window, polyorder=args.smooth_polyorder)
+        print(f"  Smoothing: Savitzky-Golay (window={args.smooth_window}, order={args.smooth_polyorder})")
+    elif args.smooth_method == "spline":
+        s = args.smooth_spline_s if args.smooth_spline_s is not None else len(X)
+        X, Y = smooth_spline(X, Y, s=s, k=3)
+        print(f"  Smoothing: spline (s={s})")
+    
+    # Step 3: Resample uniformly
+    if args.resample:
+        X, Y = resample_uniform(X, Y, num_points=args.resample_points, spacing=args.resample_spacing)
+        spacing_info = f"spacing={args.resample_spacing}" if args.resample_spacing else f"n={args.resample_points or len(X)}"
+        print(f"  Resampling: {spacing_info} -> {len(X)} points")
+    
+    return X, Y
+
+
 def main():
     ap = argparse.ArgumentParser(description="Warp CSV points using projective (homography) or TPS. Supports recursive input root with mirrored output structure.")
-    ap.add_argument("--points", default="./csv/seabright_new/", help="Input CSV file OR a ROOT folder to scan recursively for folders that directly contain CSVs (with columns x,y).")
-    ap.add_argument("--links", default="./links/control_points_seabright_new.txt", help="Control points file: ArcGIS link table (.txt) or generic CSV.")
-    ap.add_argument("--out", default="./csv/seabright_new_rec/", help="Output ROOT folder (for directory input) or output CSV file (for single-file input). When points is a directory, the directory tree is mirrored under this root.")
-    ap.add_argument("--method", choices=["projective", "tps"], default="projective", help="Transformation method: projective homography or thin-plate spline (default: projective).")
+    ap.add_argument("--points", default="./csv/trevone/", help="Input CSV file OR a ROOT folder to scan recursively for folders that directly contain CSVs (with columns x,y).")
+    ap.add_argument("--links", default="./links/control_points_trevone2.txt", help="Control points file: ArcGIS link table (.txt) or generic CSV.")
+    ap.add_argument("--out", default="./csv/trevone_rec/", help="Output ROOT folder (for directory input) or output CSV file (for single-file input). When points is a directory, the directory tree is mirrored under this root.")
+    ap.add_argument("--method", choices=["affine", "projective", "tps"], default="affine", help="Transformation method: affine (1st order polynomial, min 3 pts), projective homography (min 4 pts), or thin-plate spline (default: projective).")
     ap.add_argument("--smooth", type=float, default=0.0, help="Smoothing (lambda) for TPS. Increase slightly (e.g. 1e-3) if TPS system is near-singular.")
     ap.add_argument("--y-down", action="store_true", help="Indicates source/control pixel coords are in a Y-down system (origin top-left). They will NOT be flipped; this flag only controls how --image-height flipping is interpreted.")
     ap.add_argument("--image-height", type=int, default=None, help="If provided WITH --flip-to-yup, used to convert y_down to y_up via (H-1 - y).")
     ap.add_argument("--flip-to-yup", action="store_true", help="Convert Y-down pixel coords to math Y-up before fitting: y_up = (H-1 - y_down). Provide --image-height.")
     ap.add_argument("--report", action="store_true", help="Print RMS residuals on control points.")
+    
+    # Smoothing and filtering options
+    ap.add_argument("--smooth-method", choices=["none", "moving_average", "savgol", "spline"], default="none", 
+                    help="Post-warp smoothing method: moving_average, savgol (Savitzky-Golay), spline, or none.")
+    ap.add_argument("--smooth-window", type=int, default=11, help="Window size for moving_average and savgol smoothing (default: 11).")
+    ap.add_argument("--smooth-polyorder", type=int, default=3, help="Polynomial order for savgol filter (default: 3).")
+    ap.add_argument("--smooth-spline-s", type=float, default=None, help="Smoothing factor for spline (if None, uses data length).")
+    ap.add_argument("--remove-outliers", choices=["none", "zscore", "ransac"], default="none",
+                    help="Remove outliers before smoothing: zscore (distance-based), ransac (polynomial fit), or none.")
+    ap.add_argument("--outlier-threshold", type=float, default=3.0, 
+                    help="Threshold for outlier removal: z-score threshold (default: 3.0) or residual distance.")
+    ap.add_argument("--resample", action="store_true", help="Resample points uniformly along the curve after smoothing.")
+    ap.add_argument("--resample-points", type=int, default=None, help="Number of points for resampling (if not set, keeps original count).")
+    ap.add_argument("--resample-spacing", type=float, default=None, help="Spacing between resampled points in output units (overrides --resample-points).")
+    
     args = ap.parse_args()
 
     # Load control points
@@ -205,7 +466,16 @@ def main():
 
     # Fit transform
     transform_payload = None
-    if args.method == "tps":
+    if args.method == "affine":
+        # Affine (1st order polynomial)
+        affine_matrix = _fit_affine(src_x, src_y, dst_x, dst_y)
+        if args.report:
+            Xc, Yc = _eval_affine(affine_matrix, src_x, src_y)
+            rms_x = math.sqrt(np.mean((Xc - dst_x)**2))
+            rms_y = math.sqrt(np.mean((Yc - dst_y)**2))
+            print(f"[Affine] Control residual RMS: X={rms_x:.4f}  Y={rms_y:.4f}")
+        transform_payload = ("affine", affine_matrix)
+    elif args.method == "tps":
         (w_x, a_x), (w_y, a_y), ctrl_pts = fit_tps_explicit(src_x, src_y, dst_x, dst_y, smooth=args.smooth)
         model_x = ((w_x, a_x), ctrl_pts)
         model_y = ((w_y, a_y), ctrl_pts)
@@ -265,9 +535,17 @@ def main():
                     query = np.stack([px, py], axis=1)
                     Xw = eval_tps(model_x, query)
                     Yw = eval_tps(model_y, query)
+                elif transform_payload[0] == "affine":
+                    _, affine_matrix = transform_payload
+                    Xw, Yw = _eval_affine(affine_matrix, px, py)
                 else:
                     _, Hm = transform_payload
                     Xw, Yw = _eval_projective(Hm, px, py)
+                
+                # Apply smoothing pipeline
+                if args.smooth_method != "none" or args.remove_outliers != "none" or args.resample:
+                    Xw, Yw = apply_smoothing_pipeline(Xw, Yw, args)
+                
                 pts["X_warped"] = Xw
                 pts["Y_warped"] = Yw
                 out_csv = out_dir / f"{csv_in.stem}_warped.csv"
@@ -305,9 +583,17 @@ def main():
                 query = np.stack([px, py], axis=1)
                 Xw = eval_tps(model_x, query)
                 Yw = eval_tps(model_y, query)
+            elif transform_payload[0] == "affine":
+                _, affine_matrix = transform_payload
+                Xw, Yw = _eval_affine(affine_matrix, px, py)
             else:
                 _, Hm = transform_payload
                 Xw, Yw = _eval_projective(Hm, px, py)
+            
+            # Apply smoothing pipeline
+            if args.smooth_method != "none" or args.remove_outliers != "none" or args.resample:
+                Xw, Yw = apply_smoothing_pipeline(Xw, Yw, args)
+            
             pts["X_warped"] = Xw
             pts["Y_warped"] = Yw
             out_csv = out_dir / f"{csv_in.stem}_warped.csv"
@@ -334,11 +620,19 @@ def main():
             query = np.stack([px, py], axis=1)
             Xw = eval_tps(model_x, query)
             Yw = eval_tps(model_y, query)
+        elif transform_payload[0] == "affine":
+            _, affine_matrix = transform_payload
+            Xw, Yw = _eval_affine(affine_matrix, px, py)
         else:
             _, H = transform_payload
             Xw, Yw = _eval_projective(H, px, py)
+        
+        # Apply smoothing pipeline
+        if args.smooth_method != "none" or args.remove_outliers != "none" or args.resample:
+            Xw, Yw = apply_smoothing_pipeline(Xw, Yw, args)
+        
         pts["X_warped"] = Xw
-    pts["Y_warped"] = Yw
+        pts["Y_warped"] = Yw
     os.makedirs(os.path.dirname(os.path.abspath(args.out)) or ".", exist_ok=True)
     pts.to_csv(args.out, index=False)
     print(f"✅ Wrote warped CSV: {args.out} (columns added: X_warped, Y_warped)")

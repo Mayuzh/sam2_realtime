@@ -30,7 +30,7 @@ def main():
     parser.add_argument('--sdp-math-only', action='store_true', help='Force math attention backend to silence flash/memory-efficient warnings.')
     # New: saving shoreline frames/coords under a root per-clip subfolder
     parser.add_argument('--save-shorelines', action='store_true', help='Save shoreline frames and LabelMe JSONs for each frame.')
-    parser.add_argument('--save-root', default='./shoreline_jsons/twinlakes/onshore_low/', help='Root folder under which a per-clip subfolder will be created.')
+    parser.add_argument('--save-root', default='./shoreline_jsons/trevone/', help='Root folder under which a per-clip subfolder will be created.')
     parser.add_argument('--show-ignore-overlay', action='store_true', help='Draw a yellow translucent overlay for the ignore region (debug display only).')
     args = parser.parse_args()
 
@@ -46,7 +46,7 @@ def main():
     )
 
     fine_tuned_weights_path = "./finetuned_weights/tuned_shoreline_decoder.pth"
-    sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
+    #sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
     #print("Loaded fine-tuned mask decoder weights.")
 
     # =====================
@@ -59,19 +59,19 @@ def main():
     object_lost = False
     frames_since_loss = 0
 
-    prompt_img_site_a = cv2.imread("./masks/walton_lighthouse-2025-05-18-172217Z_001325.png")
+    prompt_img_site_a = cv2.imread("./masks/surfline_trevone_20260208_1355_000021.jpg")
     prompt_img_site_a = cv2.cvtColor(prompt_img_site_a, cv2.COLOR_BGR2RGB)
-    mask_json_site_a = "./masks/walton_lighthouse-2025-05-18-172217Z_001325.json"
+    mask_json_site_a = "./masks/surfline_trevone_20260208_1355_000021.json"
     mask_site_a = json_to_mask(mask_json_site_a, prompt_img_site_a.shape)
     mask_site_a = np.expand_dims(np.expand_dims(mask_site_a.astype(np.float32), axis=0), axis=0)
 
-    prompt_img_site_b = cv2.imread("./masks/walton_lighthouse-2025-05-18-172217Z_001325.png")
+    prompt_img_site_b = cv2.imread("./masks/surfline_trevone_20260208_1355_000021.jpg")
     prompt_img_site_b = cv2.cvtColor(prompt_img_site_b, cv2.COLOR_BGR2RGB)
-    mask_json_site_b = "./masks/walton_lighthouse-2025-05-18-172217Z_001325.json"
+    mask_json_site_b = "./masks/surfline_trevone_20260208_1355_000021.json"
     mask_site_b = json_to_mask(mask_json_site_b, prompt_img_site_b.shape)
     mask_site_b = np.expand_dims(np.expand_dims(mask_site_b.astype(np.float32), axis=0), axis=0)
 
-    rock_mask_json = "./region/walton_lighthouse-2024-01-11-214420Z.json"
+    rock_mask_json = "./region/surfline_trevone_20260208_1355_000021.json"
     rock_mask = json_to_mask(rock_mask_json, prompt_img_site_a.shape)
     rock_mask = np.expand_dims(np.expand_dims(rock_mask.astype(np.float32), axis=0), axis=0)
 
@@ -173,7 +173,7 @@ def main():
             # ORIGINAL: img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             img = cv2.cvtColor(frame_for_model, cv2.COLOR_BGR2RGB)  # use possibly blacked-out, resized frame
 
-            img_for_detection = cv2.GaussianBlur(img, (15, 15), 0) 
+            img_for_detection = cv2.GaussianBlur(img, (35, 35), 0) 
             #img_for_detection = img
 
             H, W = img.shape[:2]
@@ -204,7 +204,7 @@ def main():
                                         device=DEVICE,
                                         verbose=False
                                     )
-                                    sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
+                                    #sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
                                     sam_out = sam.track_new_object(img=current_img, mask=current_mask)
                                     #sam_out = sam.track_new_object(img=current_img, points=point_coords)  
 
@@ -229,7 +229,7 @@ def main():
                                         device=DEVICE,
                                         verbose=False
                                     )
-                                    sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
+                                    #sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
                                     print("Re-loaded fine-tuned weights after reinitialization.")
                                     current_img = prompt_img_site_a
                                     current_mask = mask_site_a

@@ -14,6 +14,7 @@ checkpoints/*.pt
 
 /model_predict/
 
+/save_predict/shoreline_jsons/trevone/
 /save_predict/shoreline_jsons/seabright/
 /save_predict/shoreline_jsons/seabright_new/
 /save_predict/shoreline_jsons/twinlakes/
@@ -22,7 +23,8 @@ checkpoints/*.pt
 
 /save_predict/videos/
 
-
+/save_predict/shoreline_jsons/csv/trevone/
+/save_predict/shoreline_jsons/csv/trevone_rec/
 /save_predict/shoreline_jsons/csv/twinlakes/
 /save_predict/shoreline_jsons/csv/twinlakes_rec/
 /save_predict/shoreline_jsons/csv/seabright/
