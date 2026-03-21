@@ -385,7 +385,26 @@ def resample_uniform(x, y, num_points=None, spacing=None):
     return x_uniform, y_uniform
 
 
-def apply_smoothing_pipeline(Xw, Yw, args):
+def _to_pca_frame(X, Y):
+    """Project 2D points into PCA frame (u alongshore, v cross-shore)."""
+    pts = np.column_stack([X, Y])
+    center = pts.mean(axis=0)
+    centered = pts - center
+    _, _, vt = np.linalg.svd(centered, full_matrices=False)
+    e1 = vt[0]
+    e2 = vt[1]
+    u = centered @ e1
+    v = centered @ e2
+    return u, v, center, e1, e2
+
+
+def _from_pca_frame(u, v, center, e1, e2):
+    """Map points from PCA frame back to XY coordinates."""
+    pts = center + np.outer(u, e1) + np.outer(v, e2)
+    return pts[:, 0], pts[:, 1]
+
+
+def apply_smoothing_pipeline(Xw, Yw, args, method_name):
     """Apply the complete smoothing and filtering pipeline to warped coordinates.
     
     Args:
@@ -393,9 +412,25 @@ def apply_smoothing_pipeline(Xw, Yw, args):
         args: parsed command-line arguments
     
     Returns:
-        X_smooth, Y_smooth: processed coordinates
+        X_smooth, Y_smooth, keeps_row_alignment
     """
     X, Y = Xw.copy(), Yw.copy()
+    keeps_row_alignment = True
+    used_pca_frame = False
+
+    frame = args.smooth_frame
+    if frame == "auto":
+        frame = "pca" if method_name == "projective" else "index"
+
+    # In PCA frame, sort by alongshore coordinate so filters act along the shoreline,
+    # which avoids zig-zag stretching for projective outputs.
+    if frame == "pca" and len(X) >= 3:
+        u, v, center, e1, e2 = _to_pca_frame(X, Y)
+        order = np.argsort(u)
+        X = u[order]
+        Y = v[order]
+        keeps_row_alignment = False
+        used_pca_frame = True
     
     # Step 1: Remove outliers (before smoothing)
     if args.remove_outliers == "zscore":
@@ -422,15 +457,18 @@ def apply_smoothing_pipeline(Xw, Yw, args):
         X, Y = resample_uniform(X, Y, num_points=args.resample_points, spacing=args.resample_spacing)
         spacing_info = f"spacing={args.resample_spacing}" if args.resample_spacing else f"n={args.resample_points or len(X)}"
         print(f"  Resampling: {spacing_info} -> {len(X)} points")
+
+    if used_pca_frame and len(X) >= 2:
+        X, Y = _from_pca_frame(X, Y, center, e1, e2)
     
-    return X, Y
+    return X, Y, keeps_row_alignment
 
 
 def main():
     ap = argparse.ArgumentParser(description="Warp CSV points using projective (homography) or TPS. Supports recursive input root with mirrored output structure.")
     ap.add_argument("--points", default="./csv/trevone/", help="Input CSV file OR a ROOT folder to scan recursively for folders that directly contain CSVs (with columns x,y).")
     ap.add_argument("--links", default="./links/control_points_trevone2.txt", help="Control points file: ArcGIS link table (.txt) or generic CSV.")
-    ap.add_argument("--out", default="./csv/trevone_rec/", help="Output ROOT folder (for directory input) or output CSV file (for single-file input). When points is a directory, the directory tree is mirrored under this root.")
+    ap.add_argument("--out", default="./csv/trevone_rec2/", help="Output ROOT folder (for directory input) or output CSV file (for single-file input). When points is a directory, the directory tree is mirrored under this root.")
     ap.add_argument("--method", choices=["affine", "projective", "tps"], default="affine", help="Transformation method: affine (1st order polynomial, min 3 pts), projective homography (min 4 pts), or thin-plate spline (default: projective).")
     ap.add_argument("--smooth", type=float, default=0.0, help="Smoothing (lambda) for TPS. Increase slightly (e.g. 1e-3) if TPS system is near-singular.")
     ap.add_argument("--y-down", action="store_true", help="Indicates source/control pixel coords are in a Y-down system (origin top-left). They will NOT be flipped; this flag only controls how --image-height flipping is interpreted.")
@@ -451,6 +489,8 @@ def main():
     ap.add_argument("--resample", action="store_true", help="Resample points uniformly along the curve after smoothing.")
     ap.add_argument("--resample-points", type=int, default=None, help="Number of points for resampling (if not set, keeps original count).")
     ap.add_argument("--resample-spacing", type=float, default=None, help="Spacing between resampled points in output units (overrides --resample-points).")
+    ap.add_argument("--smooth-frame", choices=["auto", "index", "pca"], default="auto",
+                    help="Coordinate frame for smoothing. 'auto' uses PCA for projective and index-order for affine/TPS.")
     
     args = ap.parse_args()
 
@@ -544,13 +584,23 @@ def main():
                 
                 # Apply smoothing pipeline
                 if args.smooth_method != "none" or args.remove_outliers != "none" or args.resample:
-                    Xw, Yw = apply_smoothing_pipeline(Xw, Yw, args)
+                    Xw, Yw, keeps_alignment = apply_smoothing_pipeline(Xw, Yw, args, transform_payload[0])
+                else:
+                    keeps_alignment = True
                 
-                pts["X_warped"] = Xw
-                pts["Y_warped"] = Yw
+                # Handle length mismatch if smoothing changed point count
+                if (len(Xw) != len(pts)) or (not keeps_alignment):
+                    # Create new dataframe with only warped coordinates
+                    pts_out = pd.DataFrame({"X_warped": Xw, "Y_warped": Yw})
+                else:
+                    # Keep original columns and add warped coordinates
+                    pts["X_warped"] = Xw
+                    pts["Y_warped"] = Yw
+                    pts_out = pts
+                
                 out_csv = out_dir / f"{csv_in.stem}_warped.csv"
-                pts.to_csv(out_csv, index=False)
-                total_rows += len(pts)
+                pts_out.to_csv(out_csv, index=False)
+                total_rows += len(pts_out)
                 total_files += 1
         print(f"✅ Wrote {total_files} file(s) across {touched_dirs} folder(s) under: {str(out_root)} (total rows: {total_rows})")
         return
@@ -592,13 +642,23 @@ def main():
             
             # Apply smoothing pipeline
             if args.smooth_method != "none" or args.remove_outliers != "none" or args.resample:
-                Xw, Yw = apply_smoothing_pipeline(Xw, Yw, args)
+                Xw, Yw, keeps_alignment = apply_smoothing_pipeline(Xw, Yw, args, transform_payload[0])
+            else:
+                keeps_alignment = True
             
-            pts["X_warped"] = Xw
-            pts["Y_warped"] = Yw
+            # Handle length mismatch if smoothing changed point count
+            if (len(Xw) != len(pts)) or (not keeps_alignment):
+                # Create new dataframe with only warped coordinates
+                pts_out = pd.DataFrame({"X_warped": Xw, "Y_warped": Yw})
+            else:
+                # Keep original columns and add warped coordinates
+                pts["X_warped"] = Xw
+                pts["Y_warped"] = Yw
+                pts_out = pts
+            
             out_csv = out_dir / f"{csv_in.stem}_warped.csv"
-            pts.to_csv(out_csv, index=False)
-            total += len(pts)
+            pts_out.to_csv(out_csv, index=False)
+            total += len(pts_out)
         print(f"✅ Wrote {len(points_files)} file(s) to {str(out_dir)} (total rows: {total})")
     else:
         # Single file mode
@@ -629,12 +689,22 @@ def main():
         
         # Apply smoothing pipeline
         if args.smooth_method != "none" or args.remove_outliers != "none" or args.resample:
-            Xw, Yw = apply_smoothing_pipeline(Xw, Yw, args)
+            Xw, Yw, keeps_alignment = apply_smoothing_pipeline(Xw, Yw, args, transform_payload[0])
+        else:
+            keeps_alignment = True
         
-        pts["X_warped"] = Xw
-        pts["Y_warped"] = Yw
+        # Handle length mismatch if smoothing changed point count
+        if (len(Xw) != len(pts)) or (not keeps_alignment):
+            # Create new dataframe with only warped coordinates
+            pts_out = pd.DataFrame({"X_warped": Xw, "Y_warped": Yw})
+        else:
+            # Keep original columns and add warped coordinates
+            pts["X_warped"] = Xw
+            pts["Y_warped"] = Yw
+            pts_out = pts
+        
     os.makedirs(os.path.dirname(os.path.abspath(args.out)) or ".", exist_ok=True)
-    pts.to_csv(args.out, index=False)
+    pts_out.to_csv(args.out, index=False)
     print(f"✅ Wrote warped CSV: {args.out} (columns added: X_warped, Y_warped)")
 
 if __name__ == "__main__":

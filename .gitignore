@@ -32,6 +32,8 @@ checkpoints/*.pt
 /save_predict/shoreline_jsons/csv/seabright_new/
 /save_predict/shoreline_jsons/csv/seabright_new_rec/
 /save_predict/shoreline_jsons/csv/jennette_north/
+/save_predict/shoreline_jsons/csv/trevone_smooth/
+/save_predict/shoreline_jsons/csv/seabright_new_smooth/
 
 /venv
 
