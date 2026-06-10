@@ -1,4 +1,6 @@
 import os
+import gc
+import time
 import cv2
 import numpy as np
 import torch
@@ -27,16 +29,36 @@ def main():
     parser.add_argument('--save-shorelines', action='store_true', help='Save shoreline frames and LabelMe JSONs for each frame.')
     parser.add_argument('--save-root', default='./shoreline_jsons/trevone/', help='Root folder under which a per-clip subfolder will be created.')
     parser.add_argument('--show-ignore-overlay', action='store_true', help='Draw a yellow translucent overlay for the ignore region (debug display only).')
+    parser.add_argument('--perf-log', action='store_true', help='Print rolling FPS, frame time, reinit time, and CUDA memory stats.')
+    parser.add_argument('--perf-interval', type=int, default=50, help='Processed-frame interval for --perf-log output.')
     args = parser.parse_args()
 
+    def build_tracker():
+        return build_sam2_object_tracker(
+            num_objects=NUM_OBJECTS,
+            config_file=SAM_CONFIG_FILEPATH,
+            ckpt_path=SAM_CHECKPOINT_FILEPATH,
+            device=DEVICE,
+            verbose=False
+        )
+
+    def release_tracker_memory():
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
+
+    def cuda_memory_summary():
+        if not torch.cuda.is_available():
+            return "cuda=n/a"
+        device = torch.device(DEVICE)
+        allocated_mb = torch.cuda.memory_allocated(device) / (1024 ** 2)
+        reserved_mb = torch.cuda.memory_reserved(device) / (1024 ** 2)
+        max_allocated_mb = torch.cuda.max_memory_allocated(device) / (1024 ** 2)
+        return f"cuda_alloc={allocated_mb:.0f}MB cuda_reserved={reserved_mb:.0f}MB cuda_peak={max_allocated_mb:.0f}MB"
+
     print("Initializing SAM2...")
-    sam = build_sam2_object_tracker(
-        num_objects=NUM_OBJECTS,
-        config_file=SAM_CONFIG_FILEPATH,
-        ckpt_path=SAM_CHECKPOINT_FILEPATH,
-        device=DEVICE,
-        verbose=False
-    )
+    sam = build_tracker()
 
     fine_tuned_weights_path = "./finetuned_weights/tuned_shoreline_decoder.pth"
     #sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
@@ -116,10 +138,18 @@ def main():
     INFER_W, INFER_H = 1280, 960
     # Count frames actually processed (after skipping) for periodic reinit
     processed_frame_count = 0
+    window_name = 'Santa Cruz'
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(window_name, 1280, 960)
+    perf_interval = max(1, args.perf_interval)
+    perf_window_start = time.perf_counter()
+    perf_window_frames = 0
+    last_reinit_ms = None
     # =====================
     # New: iterate video frames sequentially (no skipping)
     # =====================
     for frame_idx, frame, frame_time in streaming.iter_video_frames():
+        frame_start = time.perf_counter()
         # Skip frames to match desired processing rate if needed
         if process_stride > 1 and (frame_idx % process_stride) != 0:
             continue
@@ -182,14 +212,11 @@ def main():
                             # Reinitialize every RESTART_INTERVAL processed frames (not raw video frames)
                             if (isinstance(RESTART_INTERVAL, int) and RESTART_INTERVAL > 0 and (processed_frame_count % RESTART_INTERVAL == 0)):
                                 print(f"Frame {frame_counter}: Periodic reinitialization with mask prompt.")
-                                torch.cuda.empty_cache()
-                                sam = build_sam2_object_tracker(
-                                    num_objects=NUM_OBJECTS,
-                                    config_file=SAM_CONFIG_FILEPATH,
-                                    ckpt_path=SAM_CHECKPOINT_FILEPATH,
-                                    device=DEVICE,
-                                    verbose=False
-                                )
+                                reinit_start = time.perf_counter()
+                                del sam
+                                release_tracker_memory()
+                                sam = build_tracker()
+                                last_reinit_ms = (time.perf_counter() - reinit_start) * 1000
                                 #sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
                                 sam_out = sam.track_new_object(img=current_img, mask=current_mask)
                                 #sam_out = sam.track_new_object(img=current_img, points=point_coords)  
@@ -207,14 +234,11 @@ def main():
 
                             if frames_since_loss >= RETRY_FRAMES:
                                 print("Reinitializing with mask prompt.")
-                                torch.cuda.empty_cache()
-                                sam = build_sam2_object_tracker(
-                                    num_objects=NUM_OBJECTS,
-                                    config_file=SAM_CONFIG_FILEPATH,
-                                    ckpt_path=SAM_CHECKPOINT_FILEPATH,
-                                    device=DEVICE,
-                                    verbose=False
-                                )
+                                reinit_start = time.perf_counter()
+                                del sam
+                                release_tracker_memory()
+                                sam = build_tracker()
+                                last_reinit_ms = (time.perf_counter() - reinit_start) * 1000
                                 #sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
                                 print("Re-loaded fine-tuned weights after reinitialization.")
                                 current_img = prompt_img
@@ -273,12 +297,25 @@ def main():
                 print(f"[ignore-draw] Warning: failed to draw ignore overlay: {e}")
 
         frame_with_mask = cv2.resize(frame_with_mask, (1280, 960))
-        cv2.namedWindow('Santa Cruz', cv2.WINDOW_NORMAL)
-        cv2.resizeWindow('Santa Cruz', 1280, 960)
-        cv2.imshow("Santa Cruz", frame_with_mask)
+        cv2.imshow(window_name, frame_with_mask)
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
+
+        if args.perf_log:
+            perf_window_frames += 1
+            if perf_window_frames >= perf_interval:
+                now = time.perf_counter()
+                elapsed = now - perf_window_start
+                fps = perf_window_frames / elapsed if elapsed > 0 else 0.0
+                frame_ms = (now - frame_start) * 1000
+                reinit_part = f" last_reinit={last_reinit_ms:.0f}ms" if last_reinit_ms is not None else ""
+                print(
+                    f"[perf] processed={processed_frame_count} raw_frame={frame_counter} "
+                    f"fps={fps:.2f} frame={frame_ms:.0f}ms{reinit_part} {cuda_memory_summary()}"
+                )
+                perf_window_start = now
+                perf_window_frames = 0
 
     # streaming.capture_running = False  # legacy
     # capture_thread.join()  # legacy
