@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 import torch
 import json
+import gc
 from datetime import datetime
 import threading
 from sam2.build_sam import build_sam2_object_tracker
@@ -17,17 +18,27 @@ from utils.visualizer import Visualizer
 def main():
     global capture_running
 
-    print("Initializing SAM2...")
-    sam = build_sam2_object_tracker(
-        num_objects=NUM_OBJECTS,
-        config_file=SAM_CONFIG_FILEPATH,
-        ckpt_path=SAM_CHECKPOINT_FILEPATH,
-        device=DEVICE,
-        verbose=False
-    )
-
     fine_tuned_weights_path = "./finetuned_weights/tuned_shoreline_decoder.pth"
-    sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
+
+    def build_tracker():
+        tracker = build_sam2_object_tracker(
+            num_objects=NUM_OBJECTS,
+            config_file=SAM_CONFIG_FILEPATH,
+            ckpt_path=SAM_CHECKPOINT_FILEPATH,
+            device=DEVICE,
+            verbose=False
+        )
+        tracker.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
+        return tracker
+
+    def release_tracker_memory():
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
+
+    print("Initializing SAM2...")
+    sam = build_tracker()
     print("Loaded fine-tuned mask decoder weights.")
 
     capture_thread = threading.Thread(target=streaming.frame_capture)
@@ -58,6 +69,14 @@ def main():
 
     #visualizer = Visualizer(1280, 960)
     visualizer = Visualizer(1440, 1080)
+    window_name = 'Santa Cruz'
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(window_name, 1280, 960)
+
+    rock_mask_tensor = torch.from_numpy(rock_mask).float().to(DEVICE)
+    rock_mask_cache = {}
+    region_mask_json = "./region/walton_lighthouse-2025-05-13-233327Z.json"  # Update this path as needed
+    region_mask_cache = {}
 
     with torch.inference_mode(), torch.autocast(DEVICE, dtype=torch.bfloat16):
         while True:
@@ -75,6 +94,7 @@ def main():
                 print("No frame available, skipping...")
                 continue
 
+            previous_processed_time = last_processed_time
             if frame_time - last_processed_time < FRAME_INTERVAL:
                 continue
             last_processed_time = frame_time
@@ -100,21 +120,15 @@ def main():
                 if not object_lost:
                     if frame_counter % RESTART_INTERVAL == 0:
                         print(f"Frame {frame_counter}: Periodic reinitialization with mask prompt.")
-                        torch.cuda.empty_cache()
-                        sam = build_sam2_object_tracker(
-                            num_objects=NUM_OBJECTS,
-                            config_file=SAM_CONFIG_FILEPATH,
-                            ckpt_path=SAM_CHECKPOINT_FILEPATH,
-                            device=DEVICE,
-                            verbose=False
-                        )
-                        sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
+                        del sam
+                        release_tracker_memory()
+                        sam = build_tracker()
                         sam_out = sam.track_new_object(img=current_img, mask=current_mask)
                     else:
                         sam_out = sam.track_all_objects(img=img_for_detection)
 
                     if is_mask_lost(sam_out["pred_masks"]):
-                        print("Object lost — starting recovery countdown.")
+                        print("Object lost - starting recovery countdown.")
                         object_lost = True
                         frames_since_loss = 0
                 else:
@@ -123,15 +137,9 @@ def main():
 
                     if frames_since_loss >= RETRY_FRAMES:
                         print("Reinitializing with mask prompt.")
-                        torch.cuda.empty_cache()
-                        sam = build_sam2_object_tracker(
-                            num_objects=NUM_OBJECTS,
-                            config_file=SAM_CONFIG_FILEPATH,
-                            ckpt_path=SAM_CHECKPOINT_FILEPATH,
-                            device=DEVICE,
-                            verbose=False
-                        )
-                        sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
+                        del sam
+                        release_tracker_memory()
+                        sam = build_tracker()
                         print("Re-loaded fine-tuned weights after reinitialization.")
                         current_img = prompt_img_site_b
                         current_mask = mask_site_b
@@ -144,14 +152,15 @@ def main():
                                 dtype=torch.bfloat16, device=DEVICE)
                         }
 
-            rock_mask_tensor = torch.from_numpy(rock_mask).float().to(DEVICE)
             pred_mask_shape = sam_out["pred_masks"].shape[-2:]
-            rock_mask_resized = F.interpolate(
-                rock_mask_tensor,
-                size=pred_mask_shape,
-                mode='bilinear',
-                align_corners=False
-            )
+            if pred_mask_shape not in rock_mask_cache:
+                rock_mask_cache[pred_mask_shape] = F.interpolate(
+                    rock_mask_tensor,
+                    size=pred_mask_shape,
+                    mode='bilinear',
+                    align_corners=False
+                )
+            rock_mask_resized = rock_mask_cache[pred_mask_shape]
             if rock_mask_resized.shape[0] != sam_out["pred_masks"].shape[0]:
                 rock_mask_resized = rock_mask_resized.expand_as(sam_out["pred_masks"])
 
@@ -172,11 +181,17 @@ def main():
                 frame_index=None
             )
 
-            region_mask_json = "./region/walton_lighthouse-2025-05-13-233327Z.json"  # Update this path as needed
-            region_mask = json_to_mask(region_mask_json, frame.shape)
             # Resize mask to match the actual overlay frame size
             oh, ow = frame_with_mask.shape[:2]
-            region_mask = cv2.resize(region_mask.astype(np.uint8), (ow, oh), interpolation=cv2.INTER_NEAREST)
+            region_cache_key = (frame.shape[:2], oh, ow)
+            if region_cache_key not in region_mask_cache:
+                region_mask = json_to_mask(region_mask_json, frame.shape)
+                region_mask_cache[region_cache_key] = cv2.resize(
+                    region_mask.astype(np.uint8),
+                    (ow, oh),
+                    interpolation=cv2.INTER_NEAREST
+                )
+            region_mask = region_mask_cache[region_cache_key]
             # Make sure mask is boolean
             mask_bool = region_mask > 0.5
             # Blend: inside mask shows original frame, outside shows overlay
@@ -184,14 +199,11 @@ def main():
             blended = frame_with_mask.copy()
             blended[mask_bool] = frame_resized[mask_bool]
 
-  
-            cv2.namedWindow('Santa Cruz', cv2.WINDOW_NORMAL)
-            cv2.resizeWindow('Santa Cruz', 1280, 960)
-            cv2.imshow("Santa Cruz", blended)
+            cv2.imshow(window_name, blended)
 
             # Calculate and print the frame rate
-            if frame_time > last_processed_time:
-                frame_rate = 1 / (frame_time - last_processed_time)
+            if previous_processed_time > 0 and frame_time > previous_processed_time:
+                frame_rate = 1 / (frame_time - previous_processed_time)
                 print(f"Frame Rate: {frame_rate:.2f} FPS")
 
             if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -200,8 +212,9 @@ def main():
 
     streaming.capture_running = False
     capture_thread.join()
-    print("detroying windows...")
+    print("Destroying windows...")
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":
     main()
+
