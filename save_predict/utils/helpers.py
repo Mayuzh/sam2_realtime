@@ -50,10 +50,9 @@ def write_labelme_json(image_path, coords, image_shape, label="shoreline", margi
 
     if os.path.exists(image_path):
         saved_image = cv2.imread(image_path)
+        h, w = saved_image.shape[:2]
     else:
-        saved_image = np.zeros((image_shape[0], image_shape[1], 3), dtype=np.uint8)
-
-    h, w = saved_image.shape[:2]
+        h, w = image_shape[:2]
     # Previous clamping logic (commented out to preserve original coordinates and floats)
     # clamped = []
     # for x, y in coords:

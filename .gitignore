@@ -20,6 +20,9 @@ checkpoints/*.pt
 /save_predict/shoreline_jsons/twinlakes/
 /save_predict/shoreline_jsons/jennette_north/
 /save_predict/shoreline_jsons/jennette_pier/
+/save_predict/shoreline_jsons/shoreline_outputs/
+/save_predict/shoreline_jsons/curve_boxplot_outputs/
+/save_predict/shoreline_jsons/downloaded_webcoos_clips/
 
 /save_predict/videos/
 

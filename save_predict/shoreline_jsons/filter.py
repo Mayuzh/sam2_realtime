@@ -77,8 +77,8 @@ def process_folder(folder: str, min_points: int, dry_run: bool):
 
 def main():
     parser = argparse.ArgumentParser(description="Delete shoreline JSON/PNG pairs with too few points or empty polygons.")
-    parser.add_argument('--dir', '-d', default='./trevone', help='Directory to scan (default: current)')
-    parser.add_argument('--min-points', '-m', type=int, default=50, help='Minimum number of points required (default: 120)')
+    parser.add_argument('--dir', '-d', default='./shoreline_outputs/seabright', help='Directory to scan (default: current)')
+    parser.add_argument('--min-points', '-m', type=int, default=100, help='Minimum number of points required (default: 120)')
     parser.add_argument('--dry-run', action='store_true', help='Show what would be deleted without removing')
     args = parser.parse_args()
 

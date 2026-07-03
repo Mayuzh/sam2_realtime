@@ -38,6 +38,8 @@ class Visualizer:
         frame_index=None,
         video_filename=None,  # NEW: original video filename for naming
         save_even_if_empty=False,  # NEW: save frame and empty JSON if no contours
+        min_contour_points=3,
+        save_frame_images=True,
     ):
         frame = cv2.resize(frame, (self.video_width, self.video_height))
         original_frame = frame.copy()  # keep a copy of the resized original before drawing contours
@@ -55,7 +57,7 @@ class Visualizer:
                 if max_save_frames is None or self.saved_frame_count < max_save_frames:
                     os.makedirs(save_path, exist_ok=True)
                     for cnt in contours:
-                        if len(cnt) > 2:
+                        if len(cnt) >= max(3, int(min_contour_points)):
                             coords = [(int(pt[0][0]), int(pt[0][1])) for pt in cnt]
                             if video_filename is None:
                                 try:
@@ -70,8 +72,8 @@ class Visualizer:
                             idx_val = frame_index if frame_index is not None else self.saved_frame_count
                             frame_name = f"{base}_{idx_val:06d}.png"
                             image_output_path = os.path.join(save_path, frame_name)
-                            # Save the original (no-contour) frame image first
-                            cv2.imwrite(image_output_path, original_frame)
+                            if save_frame_images:
+                                cv2.imwrite(image_output_path, original_frame)
                             write_labelme_json(
                                 image_output_path,
                                 coords=coords,
@@ -96,7 +98,8 @@ class Visualizer:
             frame_name = f"{base}_{idx_val:06d}.png"
             image_output_path = os.path.join(save_path, frame_name)
             os.makedirs(save_path, exist_ok=True)
-            cv2.imwrite(image_output_path, original_frame)
+            if save_frame_images:
+                cv2.imwrite(image_output_path, original_frame)
             # empty coords
             write_labelme_json(
                 image_output_path,

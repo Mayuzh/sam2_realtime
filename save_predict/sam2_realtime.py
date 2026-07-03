@@ -20,6 +20,29 @@ import utils.streaming as streaming
 from utils.visualizer import Visualizer
 
 
+def parse_frame_ranges(value):
+    """Parse inclusive raw-frame ranges such as ``100:500,900:1200``."""
+    if not value:
+        return []
+    ranges = []
+    for part in value.split(','):
+        bounds = part.strip().split(':', maxsplit=1)
+        if len(bounds) != 2:
+            raise argparse.ArgumentTypeError(f"Invalid frame range: {part!r}")
+        try:
+            start, end = (int(bound) for bound in bounds)
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(f"Invalid frame range: {part!r}") from exc
+        if start < 0 or end < start:
+            raise argparse.ArgumentTypeError(f"Invalid frame range: {part!r}")
+        ranges.append((start, end))
+    ranges.sort()
+    for previous, current in zip(ranges, ranges[1:]):
+        if current[0] <= previous[1]:
+            raise argparse.ArgumentTypeError("Frame ranges must not overlap")
+    return ranges
+
+
 def main():
     parser = argparse.ArgumentParser(description='SAM2 shoreline tracking with optional ignore region blackout.')
     parser.add_argument('--ignore-json', default=None, help='Path to LabelMe JSON defining region to ignore (black out).')
@@ -28,16 +51,48 @@ def main():
     # New: saving shoreline frames/coords under a root per-clip subfolder
     parser.add_argument('--save-shorelines', action='store_true', help='Save shoreline frames and LabelMe JSONs for each frame.')
     parser.add_argument('--save-root', default='./shoreline_jsons/trevone/', help='Root folder under which a per-clip subfolder will be created.')
+    parser.add_argument('--save-dir', default=None, help='Exact folder for shoreline outputs. Overrides --save-root per-clip naming.')
+    parser.add_argument('--video-path', default=None, help='Video file or frame directory to process. Overrides utils.config.VIDEO_PATH.')
+    parser.add_argument('--desired-fps', type=float, default=None, help='Frames per second to process. Overrides DESIRED_FPS from config.')
+    parser.add_argument('--sam-config', default=None, help='SAM2 config path. Overrides SAM_CONFIG_FILEPATH from config.')
+    parser.add_argument('--sam-checkpoint', default=None, help='SAM2 checkpoint path. Overrides SAM_CHECKPOINT_FILEPATH from config.')
+    parser.add_argument('--no-display', action='store_true', help='Run without opening an OpenCV preview window.')
     parser.add_argument('--show-ignore-overlay', action='store_true', help='Draw a yellow translucent overlay for the ignore region (debug display only).')
     parser.add_argument('--perf-log', action='store_true', help='Print rolling FPS, frame time, reinit time, and CUDA memory stats.')
     parser.add_argument('--perf-interval', type=int, default=50, help='Processed-frame interval for --perf-log output.')
+    parser.add_argument(
+        '--min-shoreline-contour-points',
+        type=int,
+        default=3,
+        help='Do not save predicted shoreline contours with fewer points.',
+    )
+    parser.add_argument('--json-only', action='store_true', help='Save shoreline JSON coordinates without PNG frames.')
+    parser.add_argument(
+        '--restart-interval',
+        type=int,
+        default=None,
+        help='Processed frames between scheduled tracker rebuilds; zero disables scheduled rebuilds.',
+    )
+    parser.add_argument('--infer-width', type=int, default=1280, help='SAM2 inference width.')
+    parser.add_argument('--infer-height', type=int, default=960, help='SAM2 inference height.')
+    parser.add_argument(
+        '--include-frame-ranges',
+        type=parse_frame_ranges,
+        default=None,
+        help='Only process inclusive raw-frame ranges, e.g. 100:500,900:1200.',
+    )
     args = parser.parse_args()
+    effective_video_path = args.video_path or VIDEO_PATH
+    effective_desired_fps = args.desired_fps if args.desired_fps is not None else DESIRED_FPS
+    effective_sam_config = args.sam_config or SAM_CONFIG_FILEPATH
+    effective_sam_checkpoint = args.sam_checkpoint or SAM_CHECKPOINT_FILEPATH
+    effective_restart_interval = RESTART_INTERVAL if args.restart_interval is None else args.restart_interval
 
     def build_tracker():
         return build_sam2_object_tracker(
             num_objects=NUM_OBJECTS,
-            config_file=SAM_CONFIG_FILEPATH,
-            ckpt_path=SAM_CHECKPOINT_FILEPATH,
+            config_file=effective_sam_config,
+            ckpt_path=effective_sam_checkpoint,
             device=DEVICE,
             verbose=False
         )
@@ -74,9 +129,9 @@ def main():
     object_lost = False
     frames_since_loss = 0
 
-    prompt_img = cv2.imread("./masks/surfline_trevone_20260208_1355_000021.jpg")
+    prompt_img = cv2.imread("./masks/walton_lighthouse-2025-05-13-231928Z.jpg")
     prompt_img = cv2.cvtColor(prompt_img, cv2.COLOR_BGR2RGB)
-    mask_json = "./masks/surfline_trevone_20260208_1355_000021.json"
+    mask_json = "./masks/walton_lighthouse-2025-05-13-231928Z.json"
     prompt_mask = json_to_mask(mask_json, prompt_img.shape)
     prompt_mask = np.expand_dims(np.expand_dims(prompt_mask.astype(np.float32), axis=0), axis=0)
 
@@ -105,19 +160,19 @@ def main():
 
     # Build per-clip save directory under the provided root when saving is enabled
     if args.save_shorelines:
-        try:
-            # VIDEO_PATH is imported from utils.config via wildcard import
-            vp = VIDEO_PATH
-        except Exception:
-            vp = None
-        if vp and os.path.isdir(vp):
+        vp = effective_video_path
+        if args.save_dir:
+            per_clip_save_dir = args.save_dir
+        elif vp and os.path.isdir(vp):
             clip_name = os.path.basename(os.path.normpath(vp))
+            per_clip_save_dir = os.path.join(args.save_root, clip_name)
         elif vp:
             clip_name = os.path.splitext(os.path.basename(vp))[0]
+            per_clip_save_dir = os.path.join(args.save_root, clip_name)
         else:
             # Fallback if VIDEO_PATH unavailable
             clip_name = 'clip'
-        per_clip_save_dir = os.path.join(args.save_root, clip_name)
+            per_clip_save_dir = os.path.join(args.save_root, clip_name)
         os.makedirs(per_clip_save_dir, exist_ok=True)
     else:
         per_clip_save_dir = None
@@ -126,33 +181,69 @@ def main():
     use_math_only_attn = bool(args.sdp_math_only and torch.cuda.is_available() and sdpa_kernel is not None and SDPBackend is not None)
 
     # Determine processing stride from desired vs actual FPS
-    src_fps = streaming.get_video_fps()
-    if DESIRED_FPS is None or (src_fps is not None and DESIRED_FPS >= src_fps):
+    src_fps = streaming.get_video_fps(effective_video_path)
+    if effective_desired_fps is None or (src_fps is not None and effective_desired_fps >= src_fps):
         process_stride = 1
     elif src_fps is None:
         process_stride = 1  # unknown FPS, process all frames
     else:
-        process_stride = max(1, int(round(src_fps / float(DESIRED_FPS))))
+        process_stride = max(1, int(round(src_fps / float(effective_desired_fps))))
 
     # Inference resize target (kept consistent with Visualizer size)
-    INFER_W, INFER_H = 1280, 960
+    INFER_W = max(320, args.infer_width)
+    INFER_H = max(240, args.infer_height)
     # Count frames actually processed (after skipping) for periodic reinit
     processed_frame_count = 0
     window_name = 'Santa Cruz'
-    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(window_name, 1280, 960)
+    if not args.no_display:
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(window_name, 1280, 960)
     perf_interval = max(1, args.perf_interval)
     perf_window_start = time.perf_counter()
     perf_window_frames = 0
     last_reinit_ms = None
+    include_frame_ranges = args.include_frame_ranges or []
+    range_cursor = 0
+    active_range_index = None
+    started_target_segment = False
+    if include_frame_ranges:
+        print(f"[frame-filter] Processing raw-frame ranges: {include_frame_ranges}")
     # =====================
     # New: iterate video frames sequentially (no skipping)
     # =====================
-    for frame_idx, frame, frame_time in streaming.iter_video_frames():
+    for frame_idx, frame, frame_time in streaming.iter_video_frames(effective_video_path):
         frame_start = time.perf_counter()
         # Skip frames to match desired processing rate if needed
         if process_stride > 1 and (frame_idx % process_stride) != 0:
             continue
+
+        current_range_index = None
+        if include_frame_ranges:
+            while (
+                range_cursor < len(include_frame_ranges)
+                and frame_idx > include_frame_ranges[range_cursor][1]
+            ):
+                range_cursor += 1
+            if range_cursor >= len(include_frame_ranges):
+                break
+            range_start, range_end = include_frame_ranges[range_cursor]
+            if frame_idx < range_start or frame_idx > range_end:
+                continue
+            current_range_index = range_cursor
+
+        if current_range_index != active_range_index:
+            if started_target_segment:
+                print(f"Frame {frame_idx + 1}: entering a new included segment; resetting tracker.")
+                del sam
+                release_tracker_memory()
+                sam = build_tracker()
+                first_frame = True
+                object_lost = False
+                frames_since_loss = 0
+                processed_frame_count = 0
+            active_range_index = current_range_index
+            started_target_segment = True
+
         processed_frame_count += 1
         frame_counter = frame_idx + 1
         #last_processed_time = frame_time
@@ -204,13 +295,17 @@ def main():
                         print("First frame: initializing with mask prompt.")
                         current_img = prompt_img
                         current_mask = prompt_mask
-                        sam_out = sam.track_new_object(img=current_img, mask=current_mask)
+                        sam.track_new_object(img=current_img, mask=current_mask)
+                        sam_out = sam.track_all_objects(img=img_for_detection)
                         #sam_out = sam.track_new_object(img=current_img, points=point_coords)  # Pass only point_coords
                         first_frame = False
                     else:
                         if not object_lost:
                             # Reinitialize every RESTART_INTERVAL processed frames (not raw video frames)
-                            if (isinstance(RESTART_INTERVAL, int) and RESTART_INTERVAL > 0 and (processed_frame_count % RESTART_INTERVAL == 0)):
+                            if (
+                                effective_restart_interval > 0
+                                and processed_frame_count % effective_restart_interval == 0
+                            ):
                                 print(f"Frame {frame_counter}: Periodic reinitialization with mask prompt.")
                                 reinit_start = time.perf_counter()
                                 del sam
@@ -218,7 +313,8 @@ def main():
                                 sam = build_tracker()
                                 last_reinit_ms = (time.perf_counter() - reinit_start) * 1000
                                 #sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
-                                sam_out = sam.track_new_object(img=current_img, mask=current_mask)
+                                sam.track_new_object(img=current_img, mask=current_mask)
+                                sam_out = sam.track_all_objects(img=img_for_detection)
                                 #sam_out = sam.track_new_object(img=current_img, points=point_coords)  
 
                             else:
@@ -243,7 +339,8 @@ def main():
                                 print("Re-loaded fine-tuned weights after reinitialization.")
                                 current_img = prompt_img
                                 current_mask = prompt_mask
-                                sam_out = sam.track_new_object(img=current_img, mask=current_mask)
+                                sam.track_new_object(img=current_img, mask=current_mask)
+                                sam_out = sam.track_all_objects(img=img_for_detection)
                                 #sam_out = sam.track_new_object(img=current_img, points=point_coords)  
                                 object_lost = False
                                 frames_since_loss = 0
@@ -277,7 +374,9 @@ def main():
             save_path=per_clip_save_dir,
             max_save_frames=None,
             frame_index=frame_counter,
-            video_filename=VIDEO_PATH if 'VIDEO_PATH' in globals() else None,
+            video_filename=effective_video_path,
+            min_contour_points=args.min_shoreline_contour_points,
+            save_frame_images=not args.json_only,
         )
 
         # Draw the ignored region on the displayed frame for verification (outline + translucent fill)
@@ -297,10 +396,11 @@ def main():
                 print(f"[ignore-draw] Warning: failed to draw ignore overlay: {e}")
 
         frame_with_mask = cv2.resize(frame_with_mask, (1280, 960))
-        cv2.imshow(window_name, frame_with_mask)
+        if not args.no_display:
+            cv2.imshow(window_name, frame_with_mask)
 
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
 
         if args.perf_log:
             perf_window_frames += 1
@@ -320,7 +420,8 @@ def main():
     # streaming.capture_running = False  # legacy
     # capture_thread.join()  # legacy
     print("Destroying windows...")
-    cv2.destroyAllWindows()
+    if not args.no_display:
+        cv2.destroyAllWindows()
 
 if __name__ == "__main__":
     main()

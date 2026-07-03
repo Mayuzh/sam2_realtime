@@ -1,0 +1,3 @@
+final_plot_group,variance_window_position,plot_path,n,excluded_n,pearson_r,spearman_r,slope,intercept,r_squared
+onshore,right,C:\Users\monaz\Documents\GitHub\sam2_realtime\save_predict\shoreline_jsons\final_correlation_outputs\seabright\onshore_sea_state_vs_shoreline_variance.png,9.0,0.0,0.34448051421910303,0.5166666666666667,7.193265691552722,473.33038801783863,0.11866682467665757
+offshore,right,C:\Users\monaz\Documents\GitHub\sam2_realtime\save_predict\shoreline_jsons\final_correlation_outputs\seabright\offshore_sea_state_vs_shoreline_variance.png,8.0,0.0,0.6336927719165818,0.28571428571428575,42.00994148672638,260.75720580460296,0.401566529179321
