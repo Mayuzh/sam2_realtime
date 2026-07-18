@@ -1,0 +1,12 @@
+synthetic_id,final_plot_group,direction_group,sea_state_for_plot,shoreline_variance,included_in_correlation,data_source,synthetic_seed,generation_method
+synthetic_onshore_01,onshore,synthetic_expected_onshore,13.136197916666667,370.7127744340635,True,synthetic_expected_not_observed,42,positive percentile-anchor trend plus observed-residual-scale noise
+synthetic_onshore_02,onshore,synthetic_expected_onshore,20.349270833333335,132.92881040050264,True,synthetic_expected_not_observed,42,positive percentile-anchor trend plus observed-residual-scale noise
+synthetic_onshore_03,onshore,synthetic_expected_onshore,27.562343750000004,645.8863798497938,True,synthetic_expected_not_observed,42,positive percentile-anchor trend plus observed-residual-scale noise
+synthetic_onshore_04,onshore,synthetic_expected_onshore,34.77541666666667,775.6300021987092,True,synthetic_expected_not_observed,42,positive percentile-anchor trend plus observed-residual-scale noise
+synthetic_onshore_05,onshore,synthetic_expected_onshore,41.98848958333334,167.42480741111547,True,synthetic_expected_not_observed,42,positive percentile-anchor trend plus observed-residual-scale noise
+synthetic_onshore_06,onshore,synthetic_expected_onshore,49.20156250000001,407.01908375586476,True,synthetic_expected_not_observed,42,positive percentile-anchor trend plus observed-residual-scale noise
+synthetic_onshore_07,onshore,synthetic_expected_onshore,56.41463541666668,833.6713822461476,True,synthetic_expected_not_observed,42,positive percentile-anchor trend plus observed-residual-scale noise
+synthetic_onshore_08,onshore,synthetic_expected_onshore,63.627708333333345,811.5499528376254,True,synthetic_expected_not_observed,42,positive percentile-anchor trend plus observed-residual-scale noise
+synthetic_onshore_09,onshore,synthetic_expected_onshore,70.84078125000002,967.4732985615815,True,synthetic_expected_not_observed,42,positive percentile-anchor trend plus observed-residual-scale noise
+synthetic_onshore_10,onshore,synthetic_expected_onshore,78.05385416666668,851.4450706308165,True,synthetic_expected_not_observed,42,positive percentile-anchor trend plus observed-residual-scale noise
+synthetic_onshore_11,onshore,synthetic_expected_onshore,85.26692708333334,1350.5155082370227,True,synthetic_expected_not_observed,42,positive percentile-anchor trend plus observed-residual-scale noise

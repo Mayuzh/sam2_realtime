@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Compute the deepest (most central) shoreline per 10-min clip using a curve boxplot workflow.
+Compute one representative shoreline per clip using a curve boxplot workflow.
 
 Given a root like seabright_new_rec with:
-- baseline_warped.csv (offshore straight baseline in world coordinates)
+- baseline/baseline_warped.csv (offshore straight baseline in world coordinates)
 - subfolders per clip, each containing shoreline CSV files with X_warped, Y_warped
 
 For each clip folder:
@@ -13,12 +13,13 @@ For each clip folder:
  3) Intersect each shoreline polyline with all transects to get cross-shore distance d(s)
  4) Drop sparse curves (< --min-coverage coverage) and fill small gaps by interpolation
  5) Compute a curve boxplot: median, quartiles, whiskers (min/max ignoring NaNs)
- 6) Compute Modified Band Depth (MBD) and select the deepest curve
- 7) Export deepest as (s,d) and back-projected world coords; save PNG plot per clip
+ 6) Compute curve-boxplot statistics and export either the pointwise median
+    representative or the highest-MBD observed curve
+ 7) Export rep_shoreline_sd.csv and rep_shoreline_world.csv; save PNG plot per clip
 
 Usage:
   python compute_deepest_shoreline.py --root ./csv/seabright_new_rec \
-      --baseline ./csv/seabright_new_rec/baseline_warped.csv \
+      --baseline ./csv/seabright_new_rec/baseline/baseline_warped.csv \
       --out ./csv/seabright_new_rec/averaged --spacing 4.0 --length 200 \
       --min-coverage 0.8 --max-gap 12 --invert-normal
 
@@ -222,6 +223,47 @@ def _interpolate_small_gaps(y: np.ndarray, max_gap: int) -> np.ndarray:
     return y
 
 
+def _despike_curve(y: np.ndarray, window: int, threshold: float) -> np.ndarray:
+    """Remove isolated representative-curve spikes using a local median."""
+    if window <= 2 or threshold <= 0:
+        return y
+    if window % 2 == 0:
+        window += 1
+    out = y.copy()
+    half = window // 2
+    for i, value in enumerate(y):
+        if not np.isfinite(value):
+            continue
+        start = max(0, i - half)
+        end = min(len(y), i + half + 1)
+        local = np.r_[y[start:i], y[i + 1:end]]
+        local = local[np.isfinite(local)]
+        if local.size < max(3, half):
+            continue
+        med = float(np.median(local))
+        if abs(value - med) > threshold:
+            out[i] = np.nan
+    return out
+
+
+def _smooth_curve(y: np.ndarray, window: int) -> np.ndarray:
+    if window <= 1:
+        return y
+    if window % 2 == 0:
+        window += 1
+    finite = np.isfinite(y)
+    if finite.sum() < 2:
+        return y
+    values = np.where(finite, y, 0.0)
+    weights = np.ones(window, dtype=float)
+    numerator = np.convolve(values, weights, mode="same")
+    denominator = np.convolve(finite.astype(float), weights, mode="same")
+    out = np.full_like(y, np.nan, dtype=float)
+    ok = denominator > 0
+    out[ok] = numerator[ok] / denominator[ok]
+    return out
+
+
 # ---------------------
 # IO helpers
 # ---------------------
@@ -255,7 +297,11 @@ def _load_polyline_csv(path: Path) -> Tuple[np.ndarray, np.ndarray]:
 
 def process_clip(clip_dir: Path, baseline_xy: Tuple[np.ndarray, np.ndarray], spacing: float, length: float,
                  min_coverage: float, max_gap_samples: int, invert_normal: bool,
-                 out_dir: Path) -> Optional[Tuple[pd.DataFrame, pd.DataFrame, Path]]:
+                 out_dir: Path, representative: str,
+                 max_files: Optional[int] = None,
+                 rep_despike_window: int = 9,
+                 rep_despike_threshold: float = 40.0,
+                 rep_smooth_window: int = 5) -> Optional[Tuple[pd.DataFrame, pd.DataFrame, Path]]:
     """Process a single clip directory; returns (sd_df, world_df, fig_path) or None if no valid curves."""
     bx, by = baseline_xy
     bxs, bys, s = _resample_polyline(bx, by, spacing)
@@ -264,7 +310,12 @@ def process_clip(clip_dir: Path, baseline_xy: Tuple[np.ndarray, np.ndarray], spa
         norms = -norms
 
     # Collect shoreline polylines in this clip
-    csvs = sorted([p for p in clip_dir.glob("*.csv") if p.name.endswith("_warped.csv")])
+    csvs = sorted([
+        p for p in clip_dir.glob("*.csv")
+        if p.name.endswith("_warped.csv") and "baseline" not in p.stem.lower()
+    ])
+    if max_files is not None:
+        csvs = csvs[:max_files]
     curves: List[np.ndarray] = []
     names: List[str] = []
 
@@ -323,22 +374,32 @@ def process_clip(clip_dir: Path, baseline_xy: Tuple[np.ndarray, np.ndarray], spa
     D = np.vstack(curves)  # (N, M)
     depth = _mbd(D)
     k_star = int(np.nanargmax(depth))
-    deepest = D[k_star]
-
     med, q25, q75, vmin, vmax = _pointwise_stats(D)
+    mbd_curve = D[k_star]
+    rep = med if representative == "median" else mbd_curve
+    rep = _despike_curve(rep, rep_despike_window, rep_despike_threshold)
+    rep = _interpolate_small_gaps(rep, max_gap_samples)
+    rep = _smooth_curve(rep, rep_smooth_window)
 
-    # Back-project deepest into world coords: P_i + d_i * n_i
-    Pw = np.stack([bxs, bys], axis=1) + (deepest[:, None] * norms)
+    # Back-project representative into world coords: P_i + d_i * n_i
+    Pw = np.stack([bxs, bys], axis=1) + (rep[:, None] * norms)
 
     # Output dataframes
     sd_df = pd.DataFrame({
         "s": s,
-        "d": deepest
+        "d": rep,
+        "median_d": med,
+        "mbd_d": mbd_curve,
+        "q25_d": q25,
+        "q75_d": q75,
+        "min_d": vmin,
+        "max_d": vmax,
     })
     world_df = pd.DataFrame({
         "s": s,
         "X_warped": Pw[:, 0],
-        "Y_warped": Pw[:, 1]
+        "Y_warped": Pw[:, 1],
+        "d": rep,
     })
 
     # Plot
@@ -351,45 +412,61 @@ def process_clip(clip_dir: Path, baseline_xy: Tuple[np.ndarray, np.ndarray], spa
     # whiskers
     ax.plot(s, vmin, color=(0.6, 0.6, 0.6, 1.0), linewidth=1, label="Whisker (min/max)")
     ax.plot(s, vmax, color=(0.6, 0.6, 0.6, 1.0), linewidth=1)
-    # deepest bold
-    ax.plot(s, deepest, color=(0.85, 0.1, 0.1, 1.0), linewidth=2.5, label="Deepest (MBD)")
+    # representative bold
+    ax.plot(s, rep, color=(0.85, 0.1, 0.1, 1.0), linewidth=2.5, label=f"Representative ({representative})")
+    if representative != "mbd":
+        ax.plot(s, mbd_curve, color=(0.45, 0.1, 0.75, 0.8), linewidth=1.5, label="Highest-MBD curve")
     ax.set_xlabel("Alongshore station s (m)")
     ax.set_ylabel("Cross-shore distance d (m, + seaward)")
-    ax.set_title(f"Curve Boxplot: {clip_dir.name} (N={D.shape[0]})")
+    ax.set_title(f"Curve Boxplot: {clip_dir.name} (N={D.shape[0]}, rep={representative})")
     ax.legend(loc="best")
     ax.grid(True, alpha=0.2)
 
     out_dir.mkdir(parents=True, exist_ok=True)
     fig_path = out_dir / f"{clip_dir.name}_boxplot.png"
-    csv_sd_path = out_dir / f"{clip_dir.name}_deepest_sd.csv"
-    csv_world_path = out_dir / f"{clip_dir.name}_deepest_world.csv"
+    csv_sd_path = out_dir / "rep_shoreline_sd.csv"
+    csv_world_path = out_dir / "rep_shoreline_world.csv"
     fig.tight_layout()
     fig.savefig(fig_path, dpi=150)
     plt.close(fig)
 
     sd_df.to_csv(csv_sd_path, index=False)
     world_df.to_csv(csv_world_path, index=False)
+    sd_df.to_csv(out_dir / f"{clip_dir.name}_deepest_sd.csv", index=False)
+    world_df.to_csv(out_dir / f"{clip_dir.name}_deepest_world.csv", index=False)
 
     return sd_df, world_df, fig_path
 
 
 def main():
     import argparse
-    ap = argparse.ArgumentParser(description="Compute the deepest shoreline curve per clip using curve boxplot + MBD.")
-    ap.add_argument("--root", required=True, help="Root folder with baseline_warped.csv and clip subfolders.")
-    ap.add_argument("--baseline", default=None, help="Path to baseline_warped.csv; default: <root>/baseline_warped.csv")
+    ap = argparse.ArgumentParser(description="Compute a representative shoreline curve per clip using curve boxplot statistics.")
+    ap.add_argument("--root", required=True, help="Root folder with baseline/baseline_warped.csv and clip subfolders.")
+    ap.add_argument("--baseline", default=None, help="Path to baseline_warped.csv; default: <root>/baseline/baseline_warped.csv, falling back to <root>/baseline_warped.csv")
     ap.add_argument("--out", default=None, help="Output folder; default: <root>/averaged")
     ap.add_argument("--spacing", type=float, default=4.0, help="Baseline sampling spacing in meters (default 4.0).")
     ap.add_argument("--length", type=float, default=200.0, help="Transect forward length in meters (default 200).")
     ap.add_argument("--min-coverage", type=float, default=0.8, help="Min fraction of stations with valid intersections (default 0.8).")
     ap.add_argument("--max-gap", type=int, default=12, help="Max gap length (in samples) to fill by interpolation (default 12 samples).")
     ap.add_argument("--invert-normal", action="store_true", help="Force normal direction flip (if seaward detection seems wrong).")
+    ap.add_argument("--representative", choices=["median", "mbd"], default="median",
+                    help="Representative shoreline to export: pointwise median or highest-MBD observed curve (default median).")
+    ap.add_argument("--clip-name", default=None, help="Optional single clip folder name to process.")
+    ap.add_argument("--max-files-per-clip", type=int, default=None, help="Optional cap for quick test runs.")
+    ap.add_argument("--rep-despike-window", type=int, default=9, help="Local window for representative d(s) spike removal.")
+    ap.add_argument("--rep-despike-threshold", type=float, default=40.0, help="Drop representative d(s) points this many meters from local median.")
+    ap.add_argument("--rep-smooth-window", type=int, default=5, help="Moving-average smoothing window for representative d(s).")
     args = ap.parse_args()
 
     root = Path(args.root)
     if not root.exists():
         raise SystemExit(f"Root not found: {root}")
-    baseline_path = Path(args.baseline) if args.baseline else (root / "baseline_warped.csv")
+    if args.baseline:
+        baseline_path = Path(args.baseline)
+    elif (root / "baseline" / "baseline_warped.csv").exists():
+        baseline_path = root / "baseline" / "baseline_warped.csv"
+    else:
+        baseline_path = root / "baseline_warped.csv"
     if not baseline_path.exists():
         raise SystemExit(f"Baseline CSV not found: {baseline_path}")
     out_root = Path(args.out) if args.out else (root / "averaged")
@@ -406,6 +483,10 @@ def main():
     clip_dirs: List[Path] = []
     for p in sorted(root.iterdir()):
         if p.is_dir():
+            if p.name.lower() == "baseline":
+                continue
+            if args.clip_name is not None and p.name != args.clip_name:
+                continue
             if any(child.name.endswith("_warped.csv") for child in p.glob("*.csv")):
                 clip_dirs.append(p)
 
@@ -413,7 +494,7 @@ def main():
         print("No clip subfolders found with *_warped.csv files.")
         return
 
-    print(f"Found {len(clip_dirs)} clip folder(s). Processing…")
+    print(f"Found {len(clip_dirs)} clip folder(s). Processing...")
     for clip in clip_dirs:
         out_dir = out_root / clip.name
         try:
@@ -426,10 +507,15 @@ def main():
                 max_gap_samples=int(args.max_gap),
                 invert_normal=bool(args.invert_normal),
                 out_dir=out_dir,
+                representative=str(args.representative),
+                max_files=args.max_files_per_clip,
+                rep_despike_window=int(args.rep_despike_window),
+                rep_despike_threshold=float(args.rep_despike_threshold),
+                rep_smooth_window=int(args.rep_smooth_window),
             )
-            print(f"✅ {clip.name} → {out_dir}")
+            print(f"OK {clip.name} -> {out_dir}")
         except Exception as e:
-            print(f"❌ {clip.name}: {e}")
+            print(f"ERROR {clip.name}: {e}")
 
 
 if __name__ == "__main__":

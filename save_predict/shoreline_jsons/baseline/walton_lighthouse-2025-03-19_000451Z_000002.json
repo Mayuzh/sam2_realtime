@@ -1,0 +1,36 @@
+{
+  "version": "0.4.30",
+  "flags": {},
+  "shapes": [
+    {
+      "label": "baseline",
+      "text": "",
+      "points": [
+        [
+          666.5306122448981,
+          267.2448979591836
+        ],
+        [
+          400.20408163265313,
+          277.4489795918367
+        ],
+        [
+          668.5714285714287,
+          268.265306122449
+        ],
+        [
+          1279.0,
+          362.0
+        ]
+      ],
+      "group_id": null,
+      "shape_type": "polygon",
+      "flags": {}
+    }
+  ],
+  "imagePath": "walton_lighthouse-2025-03-19_000451Z_000002.png",
+  "imageData": null,
+  "imageHeight": 960,
+  "imageWidth": 1280,
+  "text": ""
+}

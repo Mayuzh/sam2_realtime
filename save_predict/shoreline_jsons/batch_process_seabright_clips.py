@@ -210,6 +210,10 @@ def run(args: argparse.Namespace) -> int:
             str(sam_config),
             "--sam-checkpoint",
             str(sam_checkpoint),
+            "--prompt-image",
+            str(resolve_path(args.prompt_image, Path(args.prompt_image))),
+            "--prompt-json",
+            str(resolve_path(args.prompt_json, Path(args.prompt_json))),
             "--min-shoreline-contour-points",
             str(args.min_shoreline_contour_points),
             "--restart-interval",
@@ -294,6 +298,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--view-manifest", default=None)
     parser.add_argument("--sample-manifest", default=None)
     parser.add_argument("--ignore-json", default=None)
+    parser.add_argument(
+        "--prompt-image",
+        default=str(SAVE_PREDICT_DIR / "masks" / "walton_lighthouse-2025-05-13-231928Z.jpg"),
+        help="Seabright prompt image passed to sam2_realtime.py.",
+    )
+    parser.add_argument(
+        "--prompt-json",
+        default=str(SAVE_PREDICT_DIR / "masks" / "walton_lighthouse-2025-05-13-231928Z.json"),
+        help="Seabright prompt mask JSON passed to sam2_realtime.py.",
+    )
     parser.add_argument("--ignore-blackout", action="store_true")
     parser.add_argument("--sdp-math-only", action="store_true")
     parser.add_argument("--perf-log", action="store_true")

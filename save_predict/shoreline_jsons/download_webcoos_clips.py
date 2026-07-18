@@ -287,7 +287,11 @@ def run(args: argparse.Namespace) -> int:
             manifest_rows.append(build_manifest_row(row, "", None, None, None, "unknown_location"))
             continue
 
-        target = parse_timestamp(row["timestamp"])
+        # Archive-aware candidate tables may already contain the exact WebCOOS
+        # archive timestamp to use. Honor it so a second nearest-neighbor search
+        # does not drift to a different clip.
+        preselected_timestamp = str(row.get("matched_timestamp_utc", "")).strip()
+        target = parse_timestamp(preselected_timestamp or row["timestamp"])
         element, delta_seconds = nearest_element(
             camera["service_uuid"],
             target,

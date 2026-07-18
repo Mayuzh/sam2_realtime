@@ -73,7 +73,7 @@ class Visualizer:
                             frame_name = f"{base}_{idx_val:06d}.png"
                             image_output_path = os.path.join(save_path, frame_name)
                             if save_frame_images:
-                                cv2.imwrite(image_output_path, original_frame)
+                                cv2.imwrite(image_output_path, frame)
                             write_labelme_json(
                                 image_output_path,
                                 coords=coords,
@@ -99,7 +99,7 @@ class Visualizer:
             image_output_path = os.path.join(save_path, frame_name)
             os.makedirs(save_path, exist_ok=True)
             if save_frame_images:
-                cv2.imwrite(image_output_path, original_frame)
+                cv2.imwrite(image_output_path, frame)
             # empty coords
             write_labelme_json(
                 image_output_path,

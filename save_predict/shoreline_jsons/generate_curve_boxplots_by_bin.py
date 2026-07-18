@@ -1,4 +1,4 @@
-"""Generate curve boxplots from shoreline LabelMe JSONs, grouped by sea-state bin.
+"""Generate curve boxplots from shoreline LabelMe JSONs, grouped by sea-state bin or clip.
 
 This script treats each shoreline JSON as an open shoreline polyline, not as a
 closed polygon. It converts each shoreline into a 1D function by casting
@@ -11,6 +11,12 @@ Default input layout:
 
 Default output layout:
     curve_boxplot_outputs/jennettes_pier/<direction_group>/bin_<n>/
+        curve_boxplot.png
+        curves.csv
+        boxplot_stats.csv
+
+Per-clip output layout with --group-by clip:
+    curve_boxplot_outputs_per_clip/jennettes_pier/<direction_group>/bin_<n>/<video_stem>/
         curve_boxplot.png
         curves.csv
         boxplot_stats.csv
@@ -39,6 +45,7 @@ import pandas as pd
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_SHORELINE_ROOT = SCRIPT_DIR / "shoreline_outputs" / "jennettes_pier"
 DEFAULT_OUTPUT_ROOT = SCRIPT_DIR / "curve_boxplot_outputs" / "jennettes_pier"
+DEFAULT_PER_CLIP_OUTPUT_ROOT = SCRIPT_DIR / "curve_boxplot_outputs_per_clip" / "jennettes_pier"
 DEFAULT_MANIFEST = SCRIPT_DIR / "downloaded_webcoos_clips" / "download_manifest.csv"
 DEFAULT_CANDIDATES = SCRIPT_DIR / "candidate_clip_outputs" / "candidate_clip_table.csv"
 
@@ -64,6 +71,34 @@ class BaselineGeometry:
     image_path: Path | None = None
     image_width: int = 1280
     image_height: int = 960
+
+
+def trim_baseline_geometry(
+    baseline: BaselineGeometry,
+    coordinate_min: float | None,
+    coordinate_max: float | None,
+) -> BaselineGeometry:
+    keep = np.ones(len(baseline.coordinate), dtype=bool)
+    if coordinate_min is not None:
+        keep &= baseline.coordinate >= coordinate_min
+    if coordinate_max is not None:
+        keep &= baseline.coordinate <= coordinate_max
+    if keep.sum() < 2:
+        raise ValueError(
+            "Baseline coordinate crop leaves fewer than two transects. "
+            "Relax --baseline-coordinate-min/--baseline-coordinate-max."
+        )
+    return BaselineGeometry(
+        coordinate=baseline.coordinate[keep],
+        origins=baseline.origins[keep],
+        normals=baseline.normals[keep],
+        points=baseline.points,
+        mode=baseline.mode,
+        source_path=baseline.source_path,
+        image_path=baseline.image_path,
+        image_width=baseline.image_width,
+        image_height=baseline.image_height,
+    )
 
 
 def resolve_path(path_value: str | None, default: Path) -> Path:
@@ -107,6 +142,7 @@ def load_baseline_points(
     json_path: Path,
     label: str,
     order: str,
+    min_vertex_spacing: float,
 ) -> tuple[np.ndarray, int, int, Path | None]:
     with json_path.open("r", encoding="utf-8") as handle:
         data = json.load(handle)
@@ -127,6 +163,15 @@ def load_baseline_points(
     elif order == "y":
         points = points[np.argsort(points[:, 1])]
 
+    if min_vertex_spacing > 0 and len(points) > 2:
+        kept = [points[0]]
+        for point in points[1:]:
+            if np.linalg.norm(point - kept[-1]) >= min_vertex_spacing:
+                kept.append(point)
+        if len(kept) == 1 or not np.array_equal(kept[-1], points[-1]):
+            kept.append(points[-1])
+        points = np.asarray(kept, dtype=float)
+
     width = int(data.get("imageWidth") or 1280)
     height = int(data.get("imageHeight") or 960)
     image_name = str(data.get("imagePath") or "").strip()
@@ -140,6 +185,7 @@ def sample_polyline_baseline(
     points: np.ndarray,
     samples: int,
     normal_direction: str,
+    normal_mode: str = "perpendicular",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     segments = np.diff(points, axis=0)
     lengths = np.hypot(segments[:, 0], segments[:, 1])
@@ -161,6 +207,8 @@ def sample_polyline_baseline(
         "left": np.array([-1.0, 0.0]),
     }[normal_direction]
 
+    fixed_normal = desired / np.linalg.norm(desired)
+
     for index, distance in enumerate(coordinate):
         segment_index = min(
             int(np.searchsorted(cumulative[1:], distance, side="right")),
@@ -169,10 +217,13 @@ def sample_polyline_baseline(
         fraction = (distance - cumulative[segment_index]) / lengths[segment_index]
         fraction = float(np.clip(fraction, 0.0, 1.0))
         origins[index] = starts[segment_index] + fraction * segments[segment_index]
-        tangent = segments[segment_index] / lengths[segment_index]
-        normal = np.array([-tangent[1], tangent[0]])
-        if float(np.dot(normal, desired)) < 0:
-            normal *= -1.0
+        if normal_mode == "fixed":
+            normal = fixed_normal
+        else:
+            tangent = segments[segment_index] / lengths[segment_index]
+            normal = np.array([-tangent[1], tangent[0]])
+            if float(np.dot(normal, desired)) < 0:
+                normal *= -1.0
         normals[index] = normal
     return coordinate, origins, normals
 
@@ -184,11 +235,13 @@ def build_baseline_geometry(args: argparse.Namespace) -> BaselineGeometry:
             baseline_path,
             label=args.baseline_label,
             order=args.baseline_order,
+            min_vertex_spacing=args.baseline_min_vertex_spacing,
         )
         coordinate, origins, normals = sample_polyline_baseline(
             points,
             samples=args.baseline_samples,
             normal_direction=args.normal_direction,
+            normal_mode=args.baseline_normal_mode,
         )
         return BaselineGeometry(
             coordinate=coordinate,
@@ -254,6 +307,29 @@ def split_polyline_on_gaps(points: np.ndarray, max_gap: float) -> list[np.ndarra
     return [chunk for chunk in chunks if len(chunk) >= 2]
 
 
+def smooth_polyline_points(points: np.ndarray, window: int) -> np.ndarray:
+    """Smooth small local wiggles while preserving the open shoreline ends."""
+    if window <= 2 or len(points) < 3:
+        return points
+    if window % 2 == 0:
+        window += 1
+    if len(points) < window:
+        return points
+
+    kernel = np.ones(window, dtype=float) / float(window)
+    pad = window // 2
+    padded = np.pad(points, ((pad, pad), (0, 0)), mode="edge")
+    smoothed = np.column_stack(
+        [
+            np.convolve(padded[:, 0], kernel, mode="valid"),
+            np.convolve(padded[:, 1], kernel, mode="valid"),
+        ]
+    )
+    smoothed[0] = points[0]
+    smoothed[-1] = points[-1]
+    return smoothed
+
+
 def clean_polylines(
     polylines: list[np.ndarray],
     width: int,
@@ -265,6 +341,7 @@ def clean_polylines(
     max_gap: float,
     min_points: int,
     simplify_tolerance: float,
+    polyline_smooth_window: int,
 ) -> list[np.ndarray]:
     cleaned: list[np.ndarray] = []
 
@@ -286,6 +363,7 @@ def clean_polylines(
 
         for chunk in split_polyline_on_gaps(pts, max_gap=max_gap):
             if len(chunk) >= min_points:
+                chunk = smooth_polyline_points(chunk, polyline_smooth_window)
                 if simplify_tolerance > 0:
                     chunk = cv2.approxPolyDP(
                         chunk.astype(np.float32).reshape(-1, 1, 2),
@@ -592,14 +670,15 @@ def column_nan_extreme(values: np.ndarray, mode: str) -> np.ndarray:
     return result
 
 
-def build_curve_boxplot(curves: np.ndarray) -> dict[str, np.ndarray]:
+def build_curve_boxplot(curves: np.ndarray, central_band_percent: float = 50.0) -> dict[str, np.ndarray]:
     depths = functional_depth_rank(curves)
     order = np.argsort(-depths)
     sorted_curves = curves[order]
     pointwise_median = np.nanmedian(curves, axis=0)
     median_curve = np.where(np.isfinite(sorted_curves[0]), sorted_curves[0], pointwise_median)
 
-    n_central = max(1, int(math.ceil(0.5 * curves.shape[0])))
+    central_fraction = float(np.clip(central_band_percent, 1.0, 100.0)) / 100.0
+    n_central = max(1, int(math.ceil(central_fraction * curves.shape[0])))
     central = sorted_curves[:n_central]
     lower = column_nan_extreme(central, "min")
     upper = column_nan_extreme(central, "max")
@@ -674,6 +753,21 @@ def discover_groups(root: Path) -> dict[tuple[str, str], list[Path]]:
         if not bin_name.startswith("bin_"):
             continue
         groups.setdefault((direction_group, bin_name), []).append(json_path)
+    return groups
+
+
+def discover_clip_groups(root: Path) -> dict[tuple[str, str, str], list[Path]]:
+    groups: dict[tuple[str, str, str], list[Path]] = {}
+    for json_path in sorted(root.rglob("*.json"), key=natural_key):
+        parts = json_path.relative_to(root).parts
+        if len(parts) < 4:
+            continue
+        direction_group = parts[0]
+        bin_name = parts[1]
+        video_stem = parts[2]
+        if not bin_name.startswith("bin_"):
+            continue
+        groups.setdefault((direction_group, bin_name, video_stem), []).append(json_path)
     return groups
 
 
@@ -752,6 +846,7 @@ def build_reference_curve(
         max_gap=args.max_gap,
         min_points=args.min_points,
         simplify_tolerance=args.simplify_tolerance,
+        polyline_smooth_window=args.polyline_smooth_window,
     )
     if not cleaned:
         raise ValueError(f"No usable shoreline in reference JSON: {json_path}")
@@ -797,7 +892,8 @@ def curves_from_jsons(
             right_margin=args.right_margin,
             max_gap=args.max_gap,
             min_points=args.min_points,
-            simplify_tolerance=args.simplify_tolerance,
+        simplify_tolerance=args.simplify_tolerance,
+        polyline_smooth_window=args.polyline_smooth_window,
         )
         if not cleaned:
             continue
@@ -854,16 +950,25 @@ def plot_boxplot(
     x_max: float,
     y_max: float | None,
     baseline_mode: str,
+    central_band_percent: float,
+    show_outlier_lines: bool,
 ) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     plt.figure(figsize=(10, 5))
-    plt.fill_between(baseline_coordinate, box["lower"], box["upper"], alpha=0.3, label="Central 50% band")
+    plt.fill_between(
+        baseline_coordinate,
+        box["lower"],
+        box["upper"],
+        alpha=0.3,
+        label=f"Central {central_band_percent:.0f}% band",
+    )
     plt.plot(baseline_coordinate, box["median"], linewidth=2, label="Median")
 
-    outlier_indices = np.where(box["outliers"])[0]
-    for idx in outlier_indices[:20]:
-        plt.plot(baseline_coordinate, curves[idx], linewidth=0.7, alpha=0.35)
+    if show_outlier_lines:
+        outlier_indices = np.where(box["outliers"])[0]
+        for idx in outlier_indices[:20]:
+            plt.plot(baseline_coordinate, curves[idx], linewidth=0.7, alpha=0.35)
 
     if baseline_mode == "polyline":
         plt.xlabel("Alongshore distance on baseline (pixels)")
@@ -916,11 +1021,17 @@ def save_group_outputs(
 
 def run(args: argparse.Namespace) -> int:
     shoreline_root = resolve_path(args.shoreline_root, DEFAULT_SHORELINE_ROOT)
-    output_root = resolve_path(args.output_root, DEFAULT_OUTPUT_ROOT)
+    default_output = DEFAULT_PER_CLIP_OUTPUT_ROOT if args.group_by == "clip" else DEFAULT_OUTPUT_ROOT
+    output_root = resolve_path(args.output_root, default_output)
     manifest_path = resolve_path(args.manifest, DEFAULT_MANIFEST)
     candidate_path = resolve_path(args.candidate_csv, DEFAULT_CANDIDATES)
 
     baseline = build_baseline_geometry(args)
+    baseline = trim_baseline_geometry(
+        baseline,
+        args.baseline_coordinate_min,
+        args.baseline_coordinate_max,
+    )
     baseline_coordinate = baseline.coordinate
     reference_curve = None
     if args.reference_shoreline_json:
@@ -930,7 +1041,10 @@ def run(args: argparse.Namespace) -> int:
         )
         reference_curve = build_reference_curve(reference_path, baseline, args)
         print(f"Using shoreline reference envelope: {reference_path}")
-    groups = discover_groups(shoreline_root)
+    if args.group_by == "clip":
+        groups = discover_clip_groups(shoreline_root)
+    else:
+        groups = discover_groups(shoreline_root)
     if args.direction_group:
         groups = {
             key: paths for key, paths in groups.items() if key[0] == args.direction_group
@@ -954,11 +1068,19 @@ def run(args: argparse.Namespace) -> int:
 
     summary_rows: list[dict[str, Any]] = []
 
-    for (direction_group, bin_name), json_paths in sorted(groups.items()):
+    for group_key, json_paths in sorted(groups.items()):
+        direction_group = group_key[0]
+        bin_name = group_key[1]
+        video_stem = group_key[2] if args.group_by == "clip" else ""
         if args.max_json_per_bin is not None:
             json_paths = json_paths[: args.max_json_per_bin]
 
-        print(f"[start] {direction_group}/{bin_name}: {len(json_paths)} JSON files")
+        group_label = (
+            f"{direction_group}/{bin_name}/{video_stem}"
+            if args.group_by == "clip"
+            else f"{direction_group}/{bin_name}"
+        )
+        print(f"[start] {group_label}: {len(json_paths)} JSON files")
         records = curves_from_jsons(
             json_paths,
             shoreline_root,
@@ -967,14 +1089,14 @@ def run(args: argparse.Namespace) -> int:
             args,
         )
         if len(records) < args.min_curves:
-            print(f"[skip] {direction_group}/{bin_name}: {len(records)} usable curves")
+            print(f"[skip] {group_label}: {len(records)} usable curves")
             continue
 
         curves = np.vstack([r.curve for r in records])
         sample_valid_fraction = np.isfinite(curves).mean(axis=0)
         valid_samples = sample_valid_fraction >= args.min_sample_valid_fraction
         if valid_samples.sum() < args.min_samples:
-            print(f"[skip] {direction_group}/{bin_name}: {valid_samples.sum()} usable baseline samples")
+            print(f"[skip] {group_label}: {valid_samples.sum()} usable baseline samples")
             continue
 
         curves_valid = curves[:, valid_samples]
@@ -984,16 +1106,18 @@ def run(args: argparse.Namespace) -> int:
         kept_records = [record for record, keep in zip(records, keep_frames) if keep]
 
         if curves_valid.shape[0] < args.min_curves:
-            print(f"[skip] {direction_group}/{bin_name}: {curves_valid.shape[0]} curves after sample mask")
+            print(f"[skip] {group_label}: {curves_valid.shape[0]} curves after sample mask")
             continue
 
-        box = build_curve_boxplot(curves_valid)
+        box = build_curve_boxplot(curves_valid, args.central_band_percent)
         box = smooth_boxplot_statistics(box, args.box_smooth_window)
         variance_value = curve_variance_scalar(curves_valid, box["outliers"])
         band_area = central_band_area(coordinate_valid, box["lower"], box["upper"])
 
         group_output = output_root / direction_group / bin_name
-        title = f"Curve Boxplot - {direction_group} {bin_name}"
+        if args.group_by == "clip":
+            group_output = group_output / video_stem
+        title = f"Curve Boxplot - {group_label.replace('/', ' ')}"
         plot_boxplot(
             coordinate_valid,
             curves_valid,
@@ -1004,6 +1128,8 @@ def run(args: argparse.Namespace) -> int:
             float(baseline_coordinate.max()),
             args.y_max,
             baseline.mode,
+            args.central_band_percent,
+            args.show_outlier_lines,
         )
         save_group_outputs(
             group_output,
@@ -1020,6 +1146,8 @@ def run(args: argparse.Namespace) -> int:
             "direction_group": direction_group,
             "final_plot_group": meta.get("final_plot_group", ""),
             "sea_state_bin": int(bin_name.replace("bin_", "")) if bin_name.replace("bin_", "").isdigit() else bin_name,
+            "video_stem": video_stem,
+            "group_by": args.group_by,
             "n_json_files": len(json_paths),
             "n_usable_curves": int(curves_valid.shape[0]),
             "n_baseline_samples": int(curves_valid.shape[1]),
@@ -1030,6 +1158,7 @@ def run(args: argparse.Namespace) -> int:
             "baseline_coordinate_max": float(coordinate_valid.max()),
             "curve_boxplot_variance": variance_value,
             "central_band_area": band_area,
+            "central_band_percent": args.central_band_percent,
             "outlier_count": int(box["outliers"].sum()),
             "plot_path": str(group_output / "curve_boxplot.png"),
         }
@@ -1037,7 +1166,7 @@ def run(args: argparse.Namespace) -> int:
         summary_rows.append(summary)
 
         print(
-            f"[ok] {direction_group}/{bin_name}: "
+            f"[ok] {group_label}: "
             f"{curves_valid.shape[0]} curves, variance={variance_value:.3f}"
         )
 
@@ -1066,6 +1195,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--shoreline-root", default=None, help="Root containing shoreline JSON outputs.")
     parser.add_argument("--output-root", default=None, help="Output root for plots, curve CSVs, and summary.")
+    parser.add_argument(
+        "--group-by",
+        choices=["bin", "clip"],
+        default="bin",
+        help="Generate one curve boxplot per sea-state bin or one per clip folder inside each bin.",
+    )
     parser.add_argument("--direction-group", default=None, help="Optionally process one direction group.")
     parser.add_argument("--sea-state-bin", type=int, default=None, help="Optionally process one bin number.")
     parser.add_argument("--manifest", default=None, help="Download manifest CSV for matching sea-state metadata.")
@@ -1078,6 +1213,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--baseline-label", default="baseline", help="Shape label to read from --baseline-json.")
     parser.add_argument(
+        "--baseline-min-vertex-spacing",
+        type=float,
+        default=5.0,
+        help="Drop near-duplicate baseline vertices closer than this many pixels after ordering.",
+    )
+    parser.add_argument(
         "--baseline-order",
         choices=["annotation", "x", "y"],
         default="x",
@@ -1089,10 +1230,32 @@ def parse_args() -> argparse.Namespace:
         default="down",
         help="Side of an annotated baseline toward which transects are cast.",
     )
+    parser.add_argument(
+        "--baseline-normal-mode",
+        choices=["perpendicular", "fixed"],
+        default="perpendicular",
+        help=(
+            "For annotated baselines, cast transects perpendicular to each "
+            "baseline segment or in the fixed --normal-direction. Use fixed "
+            "for Seabright's nearly horizontal vegetation baseline."
+        ),
+    )
     parser.add_argument("--baseline-x", type=float, default=0.0, help="Left vertical baseline x coordinate in pixels.")
     parser.add_argument("--baseline-y-min", type=float, default=0.0, help="Top of fixed baseline y range.")
     parser.add_argument("--baseline-y-max", type=float, default=959.0, help="Bottom of fixed baseline y range.")
     parser.add_argument("--baseline-samples", type=int, default=240, help="Number of horizontal transects.")
+    parser.add_argument(
+        "--baseline-coordinate-min",
+        type=float,
+        default=None,
+        help="Ignore annotated-baseline transects before this alongshore distance.",
+    )
+    parser.add_argument(
+        "--baseline-coordinate-max",
+        type=float,
+        default=None,
+        help="Ignore annotated-baseline transects after this alongshore distance.",
+    )
     parser.add_argument(
         "--intersection-choice",
         choices=["first", "nearest", "median", "farthest"],
@@ -1123,6 +1286,12 @@ def parse_args() -> argparse.Namespace:
         default=0.0,
         help="OpenCV polyline simplification tolerance in pixels before intersections.",
     )
+    parser.add_argument(
+        "--polyline-smooth-window",
+        type=int,
+        default=1,
+        help="Moving-average window for shoreline coordinates before intersections.",
+    )
     parser.add_argument("--interpolate-gap", type=int, default=3, help="Interpolate NaN gaps up to this many samples.")
     parser.add_argument("--smooth-window", type=int, default=5, help="Moving median window along each curve.")
     parser.add_argument(
@@ -1146,6 +1315,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-samples", type=int, default=20, help="Minimum valid baseline samples required for a bin boxplot.")
     parser.add_argument("--max-json-per-bin", type=int, default=None, help="Optional cap for quick test runs.")
     parser.add_argument("--y-max", type=float, default=None, help="Optional fixed y-axis max for distance plots.")
+    parser.add_argument(
+        "--central-band-percent",
+        type=float,
+        default=50.0,
+        help="Functional-depth central band percentage to shade.",
+    )
+    parser.add_argument(
+        "--show-outlier-lines",
+        action="store_true",
+        help="Draw outlier shoreline curves on the curve-boxplot PNG.",
+    )
     parser.add_argument(
         "--transect-preview-length",
         type=float,

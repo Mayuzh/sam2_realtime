@@ -13,7 +13,7 @@ checkpoints/*.pt
 /notebooks/videos/
 
 /model_predict/
-
+/save_predict/shoreline_jsons/csv/
 /save_predict/shoreline_jsons/trevone/
 /save_predict/shoreline_jsons/seabright/
 /save_predict/shoreline_jsons/seabright_new/
@@ -26,6 +26,9 @@ checkpoints/*.pt
 
 /save_predict/videos/
 
+/save_predict/shoreline_jsons/curve_boxplot_outputs_per_clip/
+/save_predict/shoreline_jsons/curve_boxplot_outputs/
+/save_predict/shoreline_jsons/csv/
 /save_predict/shoreline_jsons/csv/trevone/
 /save_predict/shoreline_jsons/csv/trevone_rec/
 /save_predict/shoreline_jsons/csv/twinlakes/
@@ -41,3 +44,4 @@ checkpoints/*.pt
 /venv
 
 package-list.txt
+save_predict/shoreline_jsons/save_predict/shoreline_jsons/curve_boxplot_outputs_per_clip_jump_test2/jennettes_pier/curve_boxplot_summary.csv

@@ -56,6 +56,8 @@ def main():
     parser.add_argument('--desired-fps', type=float, default=None, help='Frames per second to process. Overrides DESIRED_FPS from config.')
     parser.add_argument('--sam-config', default=None, help='SAM2 config path. Overrides SAM_CONFIG_FILEPATH from config.')
     parser.add_argument('--sam-checkpoint', default=None, help='SAM2 checkpoint path. Overrides SAM_CHECKPOINT_FILEPATH from config.')
+    parser.add_argument('--prompt-image', default="./masks/walton_lighthouse-2025-05-13-231928Z.jpg", help='Reference image used for the initial SAM2 mask prompt.')
+    parser.add_argument('--prompt-json', default="./masks/walton_lighthouse-2025-05-13-231928Z.json", help='LabelMe JSON mask used for the initial SAM2 prompt.')
     parser.add_argument('--no-display', action='store_true', help='Run without opening an OpenCV preview window.')
     parser.add_argument('--show-ignore-overlay', action='store_true', help='Draw a yellow translucent overlay for the ignore region (debug display only).')
     parser.add_argument('--perf-log', action='store_true', help='Print rolling FPS, frame time, reinit time, and CUDA memory stats.')
@@ -129,9 +131,11 @@ def main():
     object_lost = False
     frames_since_loss = 0
 
-    prompt_img = cv2.imread("./masks/walton_lighthouse-2025-05-13-231928Z.jpg")
+    prompt_img = cv2.imread(args.prompt_image)
+    if prompt_img is None:
+        raise FileNotFoundError(f"Could not read prompt image: {args.prompt_image}")
     prompt_img = cv2.cvtColor(prompt_img, cv2.COLOR_BGR2RGB)
-    mask_json = "./masks/walton_lighthouse-2025-05-13-231928Z.json"
+    mask_json = args.prompt_json
     prompt_mask = json_to_mask(mask_json, prompt_img.shape)
     prompt_mask = np.expand_dims(np.expand_dims(prompt_mask.astype(np.float32), axis=0), axis=0)
 

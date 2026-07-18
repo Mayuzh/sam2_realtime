@@ -184,7 +184,32 @@ def _eval_affine(affine_matrix, x, y):
 # -----------------------------
 # Projective (Homography) Transform Helpers
 # -----------------------------
-def _fit_projective(src_x, src_y, dst_x, dst_y):
+def _normalize_homography_points(x, y):
+    """Normalize points for a stable DLT homography solve.
+
+    The destination coordinates here are often Web Mercator values near
+    +/-1e7. Solving the raw projective system at that scale is poorly
+    conditioned, so use the standard similarity normalization first.
+    """
+    pts = np.column_stack([np.asarray(x, dtype=float), np.asarray(y, dtype=float)])
+    center = pts.mean(axis=0)
+    shifted = pts - center
+    mean_dist = np.linalg.norm(shifted, axis=1).mean()
+    if mean_dist <= 0:
+        raise ValueError("Projective transform requires non-identical control points.")
+
+    scale = math.sqrt(2.0) / mean_dist
+    T = np.array([
+        [scale, 0.0, -scale * center[0]],
+        [0.0, scale, -scale * center[1]],
+        [0.0, 0.0, 1.0],
+    ], dtype=float)
+    pts_h = np.column_stack([pts, np.ones(pts.shape[0])])
+    normalized = (T @ pts_h.T).T
+    return normalized[:, 0], normalized[:, 1], T
+
+
+def _fit_projective_raw(src_x, src_y, dst_x, dst_y):
     src_x = np.asarray(src_x, dtype=float)
     src_y = np.asarray(src_y, dtype=float)
     dst_x = np.asarray(dst_x, dtype=float)
@@ -207,6 +232,24 @@ def _fit_projective(src_x, src_y, dst_x, dst_y):
         [h[3], h[4], h[5]],
         [h[6], h[7], 1.0]
     ], dtype=float)
+    return H
+
+
+def _fit_projective(src_x, src_y, dst_x, dst_y, normalize=True):
+    """Fit a projective homography.
+
+    normalize=True uses Hartley point normalization for numerical stability
+    and is strongly recommended for georeferenced map coordinates.
+    """
+    if not normalize:
+        return _fit_projective_raw(src_x, src_y, dst_x, dst_y)
+
+    n_src_x, n_src_y, T_src = _normalize_homography_points(src_x, src_y)
+    n_dst_x, n_dst_y, T_dst = _normalize_homography_points(dst_x, dst_y)
+    H_normalized = _fit_projective_raw(n_src_x, n_src_y, n_dst_x, n_dst_y)
+    H = np.linalg.inv(T_dst) @ H_normalized @ T_src
+    if abs(H[2, 2]) > 1e-12:
+        H = H / H[2, 2]
     return H
 
 def _eval_projective(H, x, y):
@@ -469,7 +512,7 @@ def main():
     ap.add_argument("--points", default="./csv/trevone/", help="Input CSV file OR a ROOT folder to scan recursively for folders that directly contain CSVs (with columns x,y).")
     ap.add_argument("--links", default="./links/control_points_trevone2.txt", help="Control points file: ArcGIS link table (.txt) or generic CSV.")
     ap.add_argument("--out", default="./csv/trevone_rec2/", help="Output ROOT folder (for directory input) or output CSV file (for single-file input). When points is a directory, the directory tree is mirrored under this root.")
-    ap.add_argument("--method", choices=["affine", "projective", "tps"], default="affine", help="Transformation method: affine (1st order polynomial, min 3 pts), projective homography (min 4 pts), or thin-plate spline (default: projective).")
+    ap.add_argument("--method", choices=["affine", "projective", "tps"], default="projective", help="Transformation method: affine (1st order polynomial, min 3 pts), projective homography (min 4 pts), or thin-plate spline (default: projective).")
     ap.add_argument("--smooth", type=float, default=0.0, help="Smoothing (lambda) for TPS. Increase slightly (e.g. 1e-3) if TPS system is near-singular.")
     ap.add_argument("--y-down", action="store_true", help="Indicates source/control pixel coords are in a Y-down system (origin top-left). They will NOT be flipped; this flag only controls how --image-height flipping is interpreted.")
     ap.add_argument("--image-height", type=int, default=None, help="If provided WITH --flip-to-yup, used to convert y_down to y_up via (H-1 - y).")
@@ -602,7 +645,7 @@ def main():
                 pts_out.to_csv(out_csv, index=False)
                 total_rows += len(pts_out)
                 total_files += 1
-        print(f"✅ Wrote {total_files} file(s) across {touched_dirs} folder(s) under: {str(out_root)} (total rows: {total_rows})")
+        print(f"Wrote {total_files} file(s) across {touched_dirs} folder(s) under: {str(out_root)} (total rows: {total_rows})")
         return
 
     # Case 2: Single-file or flat-folder fallback
@@ -659,7 +702,7 @@ def main():
             out_csv = out_dir / f"{csv_in.stem}_warped.csv"
             pts_out.to_csv(out_csv, index=False)
             total += len(pts_out)
-        print(f"✅ Wrote {len(points_files)} file(s) to {str(out_dir)} (total rows: {total})")
+        print(f"Wrote {len(points_files)} file(s) to {str(out_dir)} (total rows: {total})")
     else:
         # Single file mode
         csv_in = points_files[0]
@@ -705,7 +748,7 @@ def main():
         
     os.makedirs(os.path.dirname(os.path.abspath(args.out)) or ".", exist_ok=True)
     pts_out.to_csv(args.out, index=False)
-    print(f"✅ Wrote warped CSV: {args.out} (columns added: X_warped, Y_warped)")
+    print(f"Wrote warped CSV: {args.out} (columns added: X_warped, Y_warped)")
 
 if __name__ == "__main__":
     main()
