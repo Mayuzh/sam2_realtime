@@ -13,6 +13,7 @@ import torch.nn.functional as F
 from utils.config import *
 from utils.helpers import is_mask_lost, json_to_mask, write_labelme_json
 import utils.streaming as streaming
+import utils.rest_stream as rest_stream
 from utils.visualizer import Visualizer
 
 def main():
@@ -40,6 +41,13 @@ def main():
     print("Initializing SAM2...")
     sam = build_tracker()
     print("Loaded fine-tuned mask decoder weights.")
+
+    stream_server = rest_stream.start_stream_server(
+        host=STREAM_SERVER_HOST,
+        port=STREAM_SERVER_PORT,
+        jpeg_quality=STREAM_SERVER_JPEG_QUALITY,
+        stream_fps=STREAM_SERVER_FPS,
+    )
 
     capture_thread = threading.Thread(target=streaming.frame_capture, daemon=True)
     capture_thread.start()
@@ -70,8 +78,8 @@ def main():
     #visualizer = Visualizer(1280, 960)
     visualizer = Visualizer(1440, 1080)
     window_name = 'Santa Cruz'
-    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(window_name, 1280, 960)
+    # cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    # cv2.resizeWindow(window_name, 1280, 960)
 
     rock_mask_tensor = torch.from_numpy(rock_mask).float().to(DEVICE)
     rock_mask_cache = {}
@@ -202,21 +210,24 @@ def main():
             blended = frame_with_mask.copy()
             blended[mask_bool] = frame_resized[mask_bool]
 
-            cv2.imshow(window_name, blended)
+            rest_stream.publish_frame(blended)
+            # cv2.imshow(window_name, blended)
 
             # Calculate and print the frame rate
             if previous_processed_time > 0 and frame_time > previous_processed_time:
                 frame_rate = 1 / (frame_time - previous_processed_time)
-                print(f"Frame Rate: {frame_rate:.2f} FPS")
+                # print(f"Frame Rate: {frame_rate:.2f} FPS")
 
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                streaming.capture_running = False  # Stop the capture thread
-                break
+            # if cv2.waitKey(1) & 0xFF == ord('q'):
+            #     streaming.capture_running = False  # Stop the capture thread
+            #     break
 
     streaming.capture_running = False
+    stream_server.shutdown()
+    stream_server.server_close()
     capture_thread.join()
-    print("Destroying windows...")
-    cv2.destroyAllWindows()
+    # print("Destroying windows...")
+    # cv2.destroyAllWindows()
 
 if __name__ == "__main__":
     try:
@@ -225,5 +236,4 @@ if __name__ == "__main__":
         print("Stopping capture...")
     finally:
         streaming.capture_running = False
-        cv2.destroyAllWindows()
-
+        # cv2.destroyAllWindows()

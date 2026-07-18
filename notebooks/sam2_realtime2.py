@@ -12,6 +12,7 @@ import torch.nn.functional as F
 from utils.config2 import *
 from utils.helpers import is_mask_lost, json_to_mask, write_labelme_json
 import utils.streaming2 as streaming
+import utils.rest_stream as rest_stream
 from utils.visualizer import Visualizer
 
 def overlay_mask_with_invisible_contour(frame, mask):
@@ -66,6 +67,13 @@ def main():
     # fine_tuned_weights_path = "./finetuned_weights/tuned_shoreline_decoder.pth"
     # sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
     # print("Loaded fine-tuned mask decoder weights.")
+
+    stream_server = rest_stream.start_stream_server(
+        host=STREAM_SERVER_HOST,
+        port=STREAM_SERVER_PORT,
+        jpeg_quality=STREAM_SERVER_JPEG_QUALITY,
+        stream_fps=STREAM_SERVER_FPS,
+    )
 
     capture_thread = threading.Thread(target=streaming.frame_capture)
     capture_thread.start()
@@ -225,16 +233,19 @@ def main():
             blended[mask_bool] = frame_resized[mask_bool]         
 
             frame_with_mask = cv2.resize(frame_with_mask, (1280, 960))
-            cv2.namedWindow('Jennette North', cv2.WINDOW_NORMAL)
-            cv2.resizeWindow('Jennette North', 1280, 960)
-            cv2.imshow("Jennette North", blended)
+            # cv2.namedWindow('Jennette North', cv2.WINDOW_NORMAL)
+            # cv2.resizeWindow('Jennette North', 1280, 960)
+            rest_stream.publish_frame(blended)
+            # cv2.imshow("Jennette North", blended)
 
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
+            # if cv2.waitKey(1) & 0xFF == ord('q'):
+            #     break
 
     streaming.capture_running = False
+    stream_server.shutdown()
+    stream_server.server_close()
     capture_thread.join()
-    cv2.destroyAllWindows()
+    # cv2.destroyAllWindows()
 
 if __name__ == "__main__":
     main()
