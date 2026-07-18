@@ -41,7 +41,7 @@ def main():
     sam = build_tracker()
     print("Loaded fine-tuned mask decoder weights.")
 
-    capture_thread = threading.Thread(target=streaming.frame_capture)
+    capture_thread = threading.Thread(target=streaming.frame_capture, daemon=True)
     capture_thread.start()
 
     first_frame = True
@@ -81,17 +81,20 @@ def main():
     with torch.inference_mode(), torch.autocast(DEVICE, dtype=torch.bfloat16):
         while True:
             now = datetime.now()
-            if now.hour < 7 or now.hour >= 19:
-                print("STREAM OFF: Outside operational hours (7 AM to 7 PM).")
-                time.sleep(300)
-                continue
+            # if now.hour < 7 or now.hour >= 19:
+            #     print("STREAM OFF: Outside operational hours (7 AM to 7 PM).")
+            #     time.sleep(300)
+            #     continue
 
             with streaming.lock:
                 frame = streaming.latest_frame.copy() if streaming.latest_frame is not None else None
                 frame_time = streaming.latest_frame_time if streaming.latest_frame_time is not None else 0
 
             if frame is None:
-                print("No frame available, skipping...")
+                if not streaming.capture_running:
+                    print("Capture stopped before a frame became available.")
+                    break
+                time.sleep(0.05)
                 continue
 
             previous_processed_time = last_processed_time
@@ -216,5 +219,11 @@ def main():
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("Stopping capture...")
+    finally:
+        streaming.capture_running = False
+        cv2.destroyAllWindows()
 
