@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 import torch
 import json
+import gc
 from datetime import datetime
 import threading
 from sam2.build_sam import build_sam2_object_tracker
@@ -54,19 +55,28 @@ def overlay_mask_with_invisible_contour(frame, mask):
 def main():
     global capture_running
 
-    print("Initializing SAM2...")
-    sam = build_sam2_object_tracker(
-        num_objects=NUM_OBJECTS,
-        config_file=SAM_CONFIG_FILEPATH,
-        ckpt_path=SAM_CHECKPOINT_FILEPATH,
-        device=DEVICE,
-        verbose=False
-    )
+    fine_tuned_weights_path = "./finetuned_weights/tuned_shoreline_decoder.pth"
 
-    # Commenting out loading of fine-tuned weights to use the original SAM2 model
-    # fine_tuned_weights_path = "./finetuned_weights/tuned_shoreline_decoder.pth"
-    # sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
-    # print("Loaded fine-tuned mask decoder weights.")
+    def build_tracker():
+        tracker = build_sam2_object_tracker(
+            num_objects=NUM_OBJECTS,
+            config_file=SAM_CONFIG_FILEPATH,
+            ckpt_path=SAM_CHECKPOINT_FILEPATH,
+            device=DEVICE,
+            verbose=False
+        )
+        tracker.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
+        return tracker
+
+    def release_tracker_memory():
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
+
+    print("Initializing SAM2...")
+    sam = build_tracker()
+    print("Loaded fine-tuned mask decoder weights.")
 
     stream_server = rest_stream.start_stream_server(
         host=STREAM_SERVER_HOST,
@@ -75,25 +85,20 @@ def main():
         stream_fps=STREAM_SERVER_FPS,
     )
 
-    capture_thread = threading.Thread(target=streaming.frame_capture)
+    capture_thread = threading.Thread(target=streaming.frame_capture, daemon=True)
     capture_thread.start()
 
     first_frame = True
     object_lost = False
     frames_since_loss = 0
 
-    # prompt_img_site_a = cv2.imread("./masks/tmmc_prls-2025-07-15-221433Z.jpg")
-    # prompt_img_site_a = cv2.cvtColor(prompt_img_site_a, cv2.COLOR_BGR2RGB)
-    # mask_json_site_a = "./masks/tmmc_prls-2025-07-15-221433Z.json"
-    # mask_site_a = json_to_mask(mask_json_site_a, prompt_img_site_a.shape)
-    # mask_site_a = np.expand_dims(np.expand_dims(mask_site_a.astype(np.float32), axis=0), axis=0)
-    prompt_img_site_a = cv2.imread("./masks/santacruzwharf-2026-01-05-000751Z.jpg")
+    prompt_img_site_a = cv2.imread("./masks/tmmc_prls-2025-07-15-221433Z.jpg")
     prompt_img_site_a = cv2.cvtColor(prompt_img_site_a, cv2.COLOR_BGR2RGB)
-    mask_json_site_a = "./masks/santacruzwharf-2026-01-05-000751Z.json"
+    mask_json_site_a = "./masks/tmmc_prls-2025-07-15-221433Z.json"
     mask_site_a = json_to_mask(mask_json_site_a, prompt_img_site_a.shape)
     mask_site_a = np.expand_dims(np.expand_dims(mask_site_a.astype(np.float32), axis=0), axis=0)
 
-    rock_mask_json = "./region/santacruzwharf-2026-01-05-000751Z.json"
+    rock_mask_json = "./region/tmmc_prls-2025-07-15-221433Z.json"
     rock_mask = json_to_mask(rock_mask_json, prompt_img_site_a.shape)
     rock_mask = np.expand_dims(np.expand_dims(rock_mask.astype(np.float32), axis=0), axis=0)
 
@@ -101,6 +106,10 @@ def main():
     frame_counter = 0
 
     visualizer = Visualizer(1280, 960)
+    rock_mask_tensor = torch.from_numpy(rock_mask).float().to(DEVICE)
+    rock_mask_cache = {}
+    region_mask_json = "./region/tmmc_prls-2025-07-15-221433Z.json"
+    region_mask_cache = {}
 
     with torch.inference_mode(), torch.autocast(DEVICE, dtype=torch.bfloat16):
         while True:
@@ -115,7 +124,10 @@ def main():
                 frame_time = streaming.latest_frame_time if streaming.latest_frame_time is not None else 0
 
             if frame is None:
-                print("No frame available, skipping...")
+                if not streaming.capture_running:
+                    print("Capture stopped before a frame became available.")
+                    break
+                time.sleep(0.05)
                 continue
 
             if frame_time - last_processed_time < FRAME_INTERVAL:
@@ -147,14 +159,9 @@ def main():
                 if not object_lost:
                     if frame_counter % RESTART_INTERVAL == 0:
                         print(f"Frame {frame_counter}: Periodic reinitialization with prompt points.")
-                        torch.cuda.empty_cache()
-                        sam = build_sam2_object_tracker(
-                            num_objects=NUM_OBJECTS,
-                            config_file=SAM_CONFIG_FILEPATH,
-                            ckpt_path=SAM_CHECKPOINT_FILEPATH,
-                            device=DEVICE,
-                            verbose=False
-                        )
+                        del sam
+                        release_tracker_memory()
+                        sam = build_tracker()
                         sam_out = sam.track_new_object(img=current_img, points=point_coords)
 
                         # Draw the prompt points directly on the output stream
@@ -164,7 +171,7 @@ def main():
                         sam_out = sam.track_all_objects(img=img_for_detection)
 
                     if is_mask_lost(sam_out["pred_masks"]):
-                        print("Object lost — starting recovery countdown.")
+                        print("Object lost - starting recovery countdown.")
                         object_lost = True
                         frames_since_loss = 0
                 else:
@@ -173,15 +180,9 @@ def main():
 
                     if frames_since_loss >= RETRY_FRAMES:
                         print("Reinitializing with mask prompt.")
-                        torch.cuda.empty_cache()
-                        sam = build_sam2_object_tracker(
-                            num_objects=NUM_OBJECTS,
-                            config_file=SAM_CONFIG_FILEPATH,
-                            ckpt_path=SAM_CHECKPOINT_FILEPATH,
-                            device=DEVICE,
-                            verbose=False
-                        )
-                        # sam.sam_mask_decoder.load_state_dict(torch.load(fine_tuned_weights_path, map_location=DEVICE))
+                        del sam
+                        release_tracker_memory()
+                        sam = build_tracker()
                         print("Re-loaded fine-tuned weights after reinitialization.")
                         current_img = prompt_img_site_a
                         #current_mask = mask_site_a
@@ -195,22 +196,23 @@ def main():
                                 dtype=torch.bfloat16, device=DEVICE)
                         }
 
-            rock_mask_tensor = torch.from_numpy(rock_mask).float().to(DEVICE)
             pred_mask_shape = sam_out["pred_masks"].shape[-2:]
-            rock_mask_resized = F.interpolate(
-                rock_mask_tensor,
-                size=pred_mask_shape,
-                mode='bilinear',
-                align_corners=False
-            )
+            if pred_mask_shape not in rock_mask_cache:
+                rock_mask_cache[pred_mask_shape] = F.interpolate(
+                    rock_mask_tensor,
+                    size=pred_mask_shape,
+                    mode='bilinear',
+                    align_corners=False
+                )
+            rock_mask_resized = rock_mask_cache[pred_mask_shape]
             if rock_mask_resized.shape[0] != sam_out["pred_masks"].shape[0]:
                 rock_mask_resized = rock_mask_resized.expand_as(sam_out["pred_masks"])
 
-            # sam_out["pred_masks"] = torch.where(
-            #     rock_mask_resized > 0.5,
-            #     torch.ones_like(sam_out["pred_masks"]),
-            #     sam_out["pred_masks"]
-            # )
+            sam_out["pred_masks"] = torch.where(
+                rock_mask_resized > 0.5,
+                torch.ones_like(sam_out["pred_masks"]),
+                sam_out["pred_masks"]
+            )
 
             frame_with_mask = visualizer.overlay_mask(
                 frame,
@@ -227,18 +229,23 @@ def main():
             #     rock_mask_resized.cpu().numpy()[0, 0]
             # --- Blend original frame and overlay using region mask ---
             
-            region_mask_json = "./region/santacruzwharf-2026-01-05-000751Z.json"  # Update this path as needed
-            region_mask = json_to_mask(region_mask_json, frame.shape)
-            # Resize mask to match display frame size (1280, 960)
-            region_mask = cv2.resize(region_mask.astype(np.uint8), (1280, 960), interpolation=cv2.INTER_NEAREST)
+            oh, ow = frame_with_mask.shape[:2]
+            region_cache_key = (frame.shape[:2], oh, ow)
+            if region_cache_key not in region_mask_cache:
+                region_mask = json_to_mask(region_mask_json, frame.shape)
+                region_mask_cache[region_cache_key] = cv2.resize(
+                    region_mask.astype(np.uint8),
+                    (ow, oh),
+                    interpolation=cv2.INTER_NEAREST
+                )
+            region_mask = region_mask_cache[region_cache_key]
             # Make sure mask is boolean
             mask_bool = region_mask > 0.5
             # Blend: inside mask shows original frame, outside shows overlay
-            frame_resized = cv2.resize(frame, (1280, 960))
+            frame_resized = cv2.resize(frame, (ow, oh))
             blended = frame_with_mask.copy()
             blended[mask_bool] = frame_resized[mask_bool]         
 
-            frame_with_mask = cv2.resize(frame_with_mask, (1280, 960))
             # cv2.namedWindow('Point Reyes', cv2.WINDOW_NORMAL)
             # cv2.resizeWindow('Point Reyes', 1280, 960)
             rest_stream.publish_frame(blended)
@@ -254,4 +261,9 @@ def main():
     # cv2.destroyAllWindows()
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("Stopping capture...")
+    finally:
+        streaming.capture_running = False
