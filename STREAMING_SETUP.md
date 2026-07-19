@@ -1,6 +1,6 @@
 # SAM2 Realtime Streaming Setup
 
-This project publishes processed SAM2 output as browser-viewable MJPEG streams. The public URLs are exposed with Cloudflare Tunnel and can be embedded in a frontend such as Vercel.
+This project publishes processed SAM2 output as production-oriented H.264/HLS streams. The public URLs are exposed with Cloudflare Tunnel and can be embedded in a frontend such as Vercel. Legacy MJPEG endpoints remain available for debugging.
 
 ## Stream Map
 
@@ -8,9 +8,9 @@ Each script starts its own local HTTP stream server:
 
 | Script | Local URL | Public URL |
 | --- | --- | --- |
-| `notebooks/sam2_realtime.py` | `http://localhost:8000/video` | `https://santa-cruz.realtimeshorelinestream.store/video` |
-| `notebooks/sam2_realtime2.py` | `http://localhost:8001/video` | `https://jennette.realtimeshorelinestream.store/video` |
-| `notebooks/sam2_realtime3.py` | `http://localhost:8002/video` | `https://point-reyes.realtimeshorelinestream.store/video` |
+| `notebooks/sam2_realtime.py` | `http://localhost:8000/hls/stream.m3u8` | `https://santa-cruz.realtimeshorelinestream.store/hls/stream.m3u8` |
+| `notebooks/sam2_realtime2.py` | `http://localhost:8001/hls/stream.m3u8` | `https://jennette.realtimeshorelinestream.store/hls/stream.m3u8` |
+| `notebooks/sam2_realtime3.py` | `http://localhost:8002/hls/stream.m3u8` | `https://point-reyes.realtimeshorelinestream.store/hls/stream.m3u8` |
 
 Health checks are available at `/health`, for example:
 
@@ -19,6 +19,12 @@ http://localhost:8000/health
 ```
 
 The scripts run headless, so stop them with `Ctrl+C`.
+
+FFmpeg is required for H.264 encoding. Install FFmpeg on each streaming computer and make sure `ffmpeg` is on `PATH`, or install the bundled Python fallback in the environment used to run the scripts:
+
+```powershell
+pip install imageio-ffmpeg
+```
 
 ## Tunnel Config Files
 
@@ -153,8 +159,37 @@ C:\Users\<windows-user>\.cloudflared\<TUNNEL_ID>.json
 
 ## Frontend Usage
 
-"https://santa-cruz.realtimeshorelinestream.store/video",
-"https://jennette.realtimeshorelinestream.store/video",
-"https://point-reyes.realtimeshorelinestream.store/video",
+Use these HLS playlist URLs in the frontend:
 
+```text
+"https://santa-cruz.realtimeshorelinestream.store/hls/stream.m3u8",
+"https://jennette.realtimeshorelinestream.store/hls/stream.m3u8",
+"https://point-reyes.realtimeshorelinestream.store/hls/stream.m3u8",
+```
+
+Safari can play an HLS URL directly in a `<video>` element. Chrome, Firefox, and Edge should use `hls.js`:
+
+```javascript
+import Hls from "hls.js";
+
+const video = document.querySelector("video");
+const streamUrl =
+  "https://santa-cruz.realtimeshorelinestream.store/hls/stream.m3u8";
+
+if (video.canPlayType("application/vnd.apple.mpegurl")) {
+  video.src = streamUrl;
+} else if (Hls.isSupported()) {
+  const hls = new Hls({
+    liveSyncDurationCount: 3,
+    liveMaxLatencyDurationCount: 6,
+  });
+  hls.loadSource(streamUrl);
+  hls.attachMedia(video);
+}
+```
+
+The element should be configured for autoplay-safe live playback:
+
+```html
+<video autoplay muted playsinline controls></video>
 ```
