@@ -179,6 +179,7 @@ def _encode_latest_frame(jpeg_quality):
 
 
 class StreamRequestHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
     jpeg_quality = 80
     stream_fps = 15
     cors_origin = "*"
@@ -188,68 +189,126 @@ class StreamRequestHandler(BaseHTTPRequestHandler):
 
     def _send_cors_headers(self):
         self.send_header("Access-Control-Allow-Origin", self.cors_origin)
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Range")
+        self.send_header("Access-Control-Expose-Headers", "Content-Length, Content-Range")
 
     def do_OPTIONS(self):
         self.send_response(204)
         self._send_cors_headers()
+        self.send_header("Content-Length", "0")
         self.end_headers()
 
     def do_GET(self):
+        self._route_request(head_only=False)
+
+    def do_HEAD(self):
+        self._route_request(head_only=True)
+
+    def _route_request(self, head_only):
         path = urlparse(self.path).path
         if path in ("/", "/health"):
-            self._send_json(get_status())
+            self._send_json(get_status(), head_only=head_only)
             return
         if path == "/snapshot.jpg":
-            self._send_snapshot()
+            self._send_snapshot(head_only=head_only)
             return
         if path == "/video":
-            self._send_mjpeg_stream()
+            # MJPEG creates one expensive, endless JPEG encoding loop per viewer
+            # and can starve the short HLS requests that production clients need.
+            self._send_json(
+                {
+                    "error": "MJPEG output is disabled",
+                    "hls": "/hls/stream.m3u8",
+                },
+                status=410,
+                head_only=head_only,
+            )
             return
         if path.startswith("/hls/"):
-            self._send_hls_file(path)
+            self._send_hls_file(path, head_only=head_only)
             return
-        self.send_error(404, "Not found")
+        self._send_json({"error": "Not found"}, status=404, head_only=head_only)
 
-    def _send_hls_file(self, request_path):
+    def _send_hls_file(self, request_path, head_only=False):
         if _hls_encoder is None:
-            self.send_error(503, "HLS encoder is not running")
+            self._send_json(
+                {"error": "HLS encoder is not running"},
+                status=503,
+                head_only=head_only,
+            )
             return
         filename = request_path.removeprefix("/hls/")
         if filename != "stream.m3u8" and not (
             filename.startswith("segment_") and filename.endswith(".ts")
         ):
-            self.send_error(404, "Not found")
+            self._send_json({"error": "Not found"}, status=404, head_only=head_only)
             return
         path = _hls_encoder.output_dir / filename
-        if not path.is_file():
-            self.send_error(503, "Stream is starting")
+        try:
+            # FFmpeg publishes files by atomic rename. Reading the complete file
+            # here makes every playlist request finite; it is never a live stream.
+            data = path.read_bytes()
+        except FileNotFoundError:
+            status = 503 if filename == "stream.m3u8" else 404
+            self._send_json(
+                {"error": "Stream is starting" if status == 503 else "Segment expired"},
+                status=status,
+                head_only=head_only,
+            )
             return
-        data = path.read_bytes()
-        self.send_response(200)
+
+        start = 0
+        end = len(data) - 1
+        status = 200
+        range_header = self.headers.get("Range")
+        if range_header and range_header.startswith("bytes="):
+            try:
+                requested = range_header.removeprefix("bytes=").split(",", 1)[0]
+                start_text, end_text = requested.split("-", 1)
+                start = int(start_text) if start_text else 0
+                end = int(end_text) if end_text else end
+                if start < 0 or end < start or start >= len(data):
+                    raise ValueError
+                end = min(end, len(data) - 1)
+                status = 206
+            except ValueError:
+                self.send_response(416)
+                self._send_cors_headers()
+                self.send_header("Content-Range", f"bytes */{len(data)}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+
+        response_data = data[start:end + 1]
+        self.send_response(status)
         self._send_cors_headers()
+        self.send_header("Accept-Ranges", "bytes")
         if filename.endswith(".m3u8"):
             self.send_header("Content-Type", "application/vnd.apple.mpegurl")
             self.send_header("Cache-Control", "no-store")
         else:
             self.send_header("Content-Type", "video/mp2t")
             self.send_header("Cache-Control", "public, max-age=30, immutable")
-        self.send_header("Content-Length", str(len(data)))
+        if status == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{len(data)}")
+        self.send_header("Content-Length", str(len(response_data)))
         self.end_headers()
-        self.wfile.write(data)
+        if not head_only:
+            self.wfile.write(response_data)
 
-    def _send_json(self, payload):
+    def _send_json(self, payload, status=200, head_only=False):
         data = json.dumps(payload).encode("utf-8")
-        self.send_response(200)
+        self.send_response(status)
         self._send_cors_headers()
         self.send_header("Content-Type", "application/json")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
-        self.wfile.write(data)
+        if not head_only:
+            self.wfile.write(data)
 
-    def _send_snapshot(self):
+    def _send_snapshot(self, head_only=False):
         jpeg = _encode_latest_frame(self.jpeg_quality)
         if jpeg is None:
             self.send_error(503, "No frame has been published yet")
@@ -260,7 +319,8 @@ class StreamRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(jpeg)))
         self.end_headers()
-        self.wfile.write(jpeg)
+        if not head_only:
+            self.wfile.write(jpeg)
 
     def _send_mjpeg_stream(self):
         self.send_response(200)
@@ -281,7 +341,7 @@ class StreamRequestHandler(BaseHTTPRequestHandler):
                 self.wfile.write(f"Content-Length: {len(jpeg)}\r\n\r\n".encode("ascii"))
                 self.wfile.write(jpeg)
                 self.wfile.write(b"\r\n")
-            except (BrokenPipeError, ConnectionResetError):
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 break
             time.sleep(delay)
 
@@ -308,7 +368,6 @@ def start_stream_server(host="localhost", port=8000, jpeg_quality=80, stream_fps
     server = StreamHTTPServer((host, port), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    print(f"[Stream Server] Serving MJPEG at http://{host}:{port}/video")
     print(f"[Stream Server] Serving HLS at http://{host}:{port}/hls/stream.m3u8")
     print(f"[Stream Server] Health check at http://{host}:{port}/health")
     return server
