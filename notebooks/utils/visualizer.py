@@ -11,7 +11,10 @@ class Visualizer:
         self.saved_frame_count = 0
 
     def resize_mask(self, mask):
-        mask = torch.tensor(mask, device='cpu')
+        if isinstance(mask, torch.Tensor):
+            mask = mask.detach().to(device='cpu')
+        else:
+            mask = torch.as_tensor(mask, device='cpu')
         mask = torch.nn.functional.interpolate(
             mask,
             size=(self.video_height, self.video_width),
@@ -31,6 +34,7 @@ class Visualizer:
         frame_index=None
     ):
         frame = cv2.resize(frame, (self.video_width, self.video_height))
+        source_frame = frame.copy()
         pred_masks = self.resize_mask(pred_masks)
         pred_masks = (pred_masks > 0.0).numpy()
         if rock_mask is not None:
@@ -51,7 +55,8 @@ class Visualizer:
                             write_labelme_json(
                                 json_image_path,
                                 coords=coords,
-                                image_shape=(self.video_height, self.video_width)
+                                image_shape=(self.video_height, self.video_width),
+                                image=source_frame
                             )
                             self.saved_frame_count += 1
                             break

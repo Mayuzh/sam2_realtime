@@ -92,13 +92,13 @@ def main():
     object_lost = False
     frames_since_loss = 0
 
-    prompt_img_site_a = cv2.imread("./masks/jennette_north-2025-10-09-130944Z.jpg")
+    prompt_img_site_a = cv2.imread("./masks/jennette_north2.png")
     prompt_img_site_a = cv2.cvtColor(prompt_img_site_a, cv2.COLOR_BGR2RGB)
-    mask_json_site_a = "./masks/jennette_north-2025-10-09-130944Z.json"
+    mask_json_site_a = "./masks/jennette_north2.json"
     mask_site_a = json_to_mask(mask_json_site_a, prompt_img_site_a.shape)
     mask_site_a = np.expand_dims(np.expand_dims(mask_site_a.astype(np.float32), axis=0), axis=0)
 
-    rock_mask_json = "./region/jennette_north-2025-07-21-235641Z.json"
+    rock_mask_json = "./region/jennette_north2.json"
     rock_mask = json_to_mask(rock_mask_json, prompt_img_site_a.shape)
     rock_mask = np.expand_dims(np.expand_dims(rock_mask.astype(np.float32), axis=0), axis=0)
 
@@ -108,7 +108,7 @@ def main():
     visualizer = Visualizer(1280, 960)
     rock_mask_tensor = torch.from_numpy(rock_mask).float().to(DEVICE)
     rock_mask_cache = {}
-    region_mask_json = "./region/jennette_north-2025-07-21-235641Z.json"
+    region_mask_json = "./region/jennette_north2.json"
     region_mask_cache = {}
 
     with torch.inference_mode(), torch.autocast(DEVICE, dtype=torch.bfloat16):
@@ -147,12 +147,14 @@ def main():
                 print("First frame: initializing with prompt points.")
                 current_img = prompt_img_site_a
                 #sam_out = sam.track_new_object(img=current_img, mask=current_mask)
-                point_coords = np.array([[start_x, start_y]])  # Example point coordinates
+                prompt_h, prompt_w = current_img.shape[:2]
+                point_coords = np.array([[3 * prompt_w / 4, prompt_h / 3]])
+                display_point_coords = np.array([[start_x, start_y]])
                 sam_out = sam.track_new_object(img=current_img, points=point_coords)  # Pass only point_coords
 
                 # Draw the prompt points directly on the output stream
-                for point in point_coords:
-                    cv2.circle(frame, tuple(point), radius=5, color=(0, 255, 0), thickness=-1)
+                for point in display_point_coords:
+                    cv2.circle(frame, tuple(point.astype(int)), radius=5, color=(0, 255, 0), thickness=-1)
                 first_frame = False
             else:
                 if not object_lost:
@@ -164,8 +166,8 @@ def main():
                         sam_out = sam.track_new_object(img=current_img, points=point_coords)
 
                         # Draw the prompt points directly on the output stream
-                        for point in point_coords:
-                            cv2.circle(frame, tuple(point), radius=5, color=(0, 255, 0), thickness=-1)
+                        for point in display_point_coords:
+                            cv2.circle(frame, tuple(point.astype(int)), radius=5, color=(0, 255, 0), thickness=-1)
                     else:
                         sam_out = sam.track_all_objects(img=img_for_detection)
 
@@ -218,8 +220,8 @@ def main():
                 sam_out["pred_masks"],
                 rock_mask=None,
                 save_shoreline_coords=False,
-                save_path="./shoreline_jsons/test1",
-                max_save_frames=300,
+                save_path="./temp/",
+                max_save_frames=5,
                 frame_index=None
             )
 

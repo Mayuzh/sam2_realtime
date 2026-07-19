@@ -68,7 +68,7 @@ def main():
     mask_site_b = json_to_mask(mask_json_site_b, prompt_img_site_b.shape)
     mask_site_b = np.expand_dims(np.expand_dims(mask_site_b.astype(np.float32), axis=0), axis=0)
 
-    rock_mask_json = "./region/walton_lighthouse-2025-05-13-231928Z.json"
+    rock_mask_json = "./region/seabright2.json"
     rock_mask = json_to_mask(rock_mask_json, prompt_img_site_a.shape)
     rock_mask = np.expand_dims(np.expand_dims(rock_mask.astype(np.float32), axis=0), axis=0)
 
@@ -83,7 +83,7 @@ def main():
 
     rock_mask_tensor = torch.from_numpy(rock_mask).float().to(DEVICE)
     rock_mask_cache = {}
-    region_mask_json = "./region/walton_lighthouse-2025-05-13-233327Z.json"  # Update this path as needed
+    region_mask_json = "./region/seabright2.json"
     region_mask_cache = {}
 
     with torch.inference_mode(), torch.autocast(DEVICE, dtype=torch.bfloat16):
@@ -187,8 +187,8 @@ def main():
                 sam_out["pred_masks"],
                 rock_mask=None,
                 save_shoreline_coords=False,
-                save_path="./shoreline_jsons/twinlakes/13",
-                max_save_frames=None,
+                save_path="./temp/",
+                max_save_frames=5,
                 frame_index=None
             )
 
