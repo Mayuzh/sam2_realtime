@@ -1,0 +1,10 @@
+# Replace <SECONDARY_TUNNEL_ID> with the ID printed by:
+# cloudflared tunnel create sam2-cameras-b
+tunnel: <SECONDARY_TUNNEL_ID>
+
+ingress:
+  - hostname: jennette.realtimeshorelinestream.store
+    service: http://localhost:8001
+  - hostname: point-reyes.realtimeshorelinestream.store
+    service: http://localhost:8002
+  - service: http_status:404
