@@ -45,3 +45,5 @@ checkpoints/*.pt
 
 package-list.txt
 save_predict/shoreline_jsons/save_predict/shoreline_jsons/curve_boxplot_outputs_per_clip_jump_test2/jennettes_pier/curve_boxplot_summary.csv
+
+/notebooks/temp/hls_*/
