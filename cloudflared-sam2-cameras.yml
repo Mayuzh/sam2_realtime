@@ -1,0 +1,11 @@
+tunnel: 70209acc-9463-4898-a962-a4167f00f7d6
+credentials-file: C:\Users\Jeff\.cloudflared\70209acc-9463-4898-a962-a4167f00f7d6.json
+
+ingress:
+  - hostname: santa-cruz.realtimeshorelinestream.store
+    service: http://localhost:8000
+  - hostname: jennette.realtimeshorelinestream.store
+    service: http://localhost:8001
+  - hostname: point-reyes.realtimeshorelinestream.store
+    service: http://localhost:8002
+  - service: http_status:404
